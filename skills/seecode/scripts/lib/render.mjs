@@ -1,13 +1,13 @@
 // Spec → HTML pipeline used by `seecode.mjs render|validate`.
 import { setWidthScale } from './text.mjs';
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, realpathSync, existsSync } from 'node:fs';
 import { dirname, resolve, basename, extname, join, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validate } from './schema.mjs';
 import { TYPES, typeInfo, resolveAlias, ALIASES } from './types.mjs';
 import { resolvePreset } from './motion.mjs';
 import { buildPage } from './page.mjs';
-import { loadData } from './data.mjs';
+import { loadData, isInside } from './data.mjs';
 
 const SCHEMA_DIR = fileURLToPath(new URL('../../schemas/', import.meta.url));
 const schemaCache = new Map();
@@ -126,7 +126,18 @@ export function outPathFor(spec, specPath, settings = {}) {
     const base = resolve(specPath ? dirname(specPath) : process.cwd());
     const target = resolve(base, spec.out);
     const rel = relative(base, target);
-    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+    const parts = rel.split(/[\\/]+/);
+    if (!rel || isAbsolute(rel) || parts[0] === '..' || /^[a-zA-Z]:/.test(rel)) {
+      throw new Error('spec.out deve permanecer dentro do diretório de saída');
+    }
+    // só uma página .html, fora de pastas/arquivos ocultos (.git/config,
+    // .github/workflows…), para a spec não sobrescrever outra coisa
+    if (!/\.html?$/i.test(target) || parts.some((p) => p.startsWith('.'))) {
+      throw new Error('spec.out deve ser um arquivo .html fora de pastas ocultas');
+    }
+    // um link simbólico no caminho não pode levar a escrita para fora
+    const anchor = nearestExisting(dirname(target));
+    if (isInside(base, anchor) && !isInside(realOrSelf(base), realOrSelf(anchor))) {
       throw new Error('spec.out deve permanecer dentro do diretório de saída');
     }
     return target;
@@ -134,6 +145,9 @@ export function outPathFor(spec, specPath, settings = {}) {
   if (specPath) return join(dirname(specPath), `${basename(specPath, extname(specPath)).replace(/\.spec$/, '')}.html`);
   return resolve(settings.outputDir || 'seecode-out', 'diagram.html');
 }
+
+const realOrSelf = (p) => { try { return realpathSync(p); } catch { return p; } };
+const nearestExisting = (p) => { let d = p; while (!existsSync(d) && dirname(d) !== d) d = dirname(d); return d; };
 
 export function writeAtomic(path, content) {
   mkdirSync(dirname(path), { recursive: true });

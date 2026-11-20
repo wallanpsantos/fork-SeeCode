@@ -52,7 +52,7 @@ test('rendering a folder writes every diagram and an index in source order', () 
   assert.deepEqual(diagramsIn(r.folder).map((p) => p.split(/[/\\]/).pop()), ['01-request-flow.html', '02-payment-sequence.html', '03-order-lifecycle.html']);
   const index = readFileSync(f.index, 'utf8');
   const links = [...index.matchAll(/<a class="card" href="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(links, ['01-request-flow.html', '02-payment-sequence.html', '03-order-lifecycle.html']);
+  assert.deepEqual(links, ['./01-request-flow.html', './02-payment-sequence.html', './03-order-lifecycle.html']);
   assert.match(index, /Payment sequence/);
 });
 

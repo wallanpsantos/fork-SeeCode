@@ -34,7 +34,8 @@ export function renderFolder(dir, { motion } = {}) {
     const spec = motion ? { ...it.spec, motion } : it.spec;
     const r = renderSpec(spec, { specPath: it.path, settings });
     if (!r.ok) return { spec: it.file, ...summarize(r) };
-    const out = outPathFor(spec, it.path, settings);
+    let out;
+    try { out = outPathFor(spec, it.path, settings); } catch (e) { return { spec: it.file, ok: false, error: e.message }; }
     writeAtomic(out, r.html);
     const s = summarize(r, out);
     return { spec: it.file, ok: true, out, title: spec.title || s.type, type: s.type, ...(s.problems ? { problems: s.problems } : {}) };
@@ -53,6 +54,11 @@ export function renderFolder(dir, { motion } = {}) {
   };
 }
 
+// Link para um arquivo da própria pasta: sempre "./nome", com o nome
+// codificado como um segmento só. Um nome como "javascript:alert(1)" vira
+// um arquivo relativo, nunca um esquema de URL.
+const pageHref = (file) => `./${encodeURIComponent(file)}`;
+
 export function indexHtml(name, cards, settings = {}) {
   const title = name.replace(/[-_]+/g, ' ');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>
@@ -67,7 +73,7 @@ iframe{width:200%;height:420px;border:0;transform:scale(.5);transform-origin:0 0
 .meta b{font-weight:600;font-size:13px;flex:1}.meta code{font:11px var(--sc-font-mono);color:var(--sc-soft)}
 @media (max-width:640px){body{padding:28px 16px}}</style></head><body><main><h1>${esc(title)}</h1>
 <p class="lead">${cards.length} diagram${cards.length === 1 ? '' : 's'}, in source order. Open one to explore it: hover to trace, click to focus, ◀ ▶ to step.</p>
-<ol>${cards.map((c) => `<li><a class="card" href="${esc(encodeURI(c.href))}"><iframe src="${esc(encodeURI(c.href))}?motion=still&amp;embed=1&amp;theme=light" loading="lazy" tabindex="-1" title="${esc(c.title)}"></iframe><div class="meta"><b>${esc(c.title)}</b><code>${esc(c.type || '')}</code></div></a></li>`).join('')}</ol>
+<ol>${cards.map((c) => `<li><a class="card" href="${esc(pageHref(c.href))}"><iframe src="${esc(pageHref(c.href))}?motion=still&amp;embed=1&amp;theme=light" loading="lazy" tabindex="-1" title="${esc(c.title)}"></iframe><div class="meta"><b>${esc(c.title)}</b><code>${esc(c.type || '')}</code></div></a></li>`).join('')}</ol>
 </main></body></html>
 `;
 }
