@@ -66,8 +66,17 @@ export function fontStacks(brandFonts = {}) {
 // Type ramp (px) shared by every renderer.
 export const TYPE = { label: 12, sub: 9, tag: 7, edge: 8, axis: 8, legend: 9, title: 13 };
 
+// Os tokens vão crus para dentro de <style>: só passam nomes simples e valores
+// de cor, número ou pilha de fontes. Nada que feche a regra, a tag <style> ou
+// abra url()/expressões.
+const SAFE_KEY = /^[a-z0-9-]{1,40}$/;
+const SAFE_VALUE = /^[\w\s#(),.%'+-]{1,300}$/;
+
 function vars(skin) {
-  return Object.entries(skin).map(([k, v]) => `--sc-${k}:${v};`).join('');
+  return Object.entries(skin)
+    .filter(([k, v]) => SAFE_KEY.test(k) && SAFE_VALUE.test(String(v)) && !/url\s*\(|expression\s*\(/i.test(String(v)))
+    .map(([k, v]) => `--sc-${k}:${v};`)
+    .join('');
 }
 
 // A brand palette's roles become a full skin: with paper and ink given, every
