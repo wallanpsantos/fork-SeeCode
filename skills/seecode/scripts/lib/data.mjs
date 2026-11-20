@@ -1,10 +1,28 @@
 // Resolve `"data": "file.csv"` style references so chart data never has to
 // pass through the model. Supports CSV/TSV (header row) and JSON arrays.
-import { readFileSync, realpathSync } from 'node:fs';
-import { resolve, extname, relative, isAbsolute, sep } from 'node:path';
-import { projectRoot } from './config/config.mjs';
+import { readFileSync, realpathSync, existsSync } from 'node:fs';
+import { resolve, extname, relative, isAbsolute, sep, dirname, join } from 'node:path';
+import { homedir } from 'node:os';
+import { globalDir } from './config/config.mjs';
 
 const DATA_EXT = new Set(['.csv', '.tsv', '.json']);
+
+const samePath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+// Raiz que limita os dados de uma spec: a pasta acima com .git, ou com um
+// .seecode/config.json que não seja o global (~/.seecode/config.json, que
+// faria da pasta pessoal inteira um "projeto"). A pasta pessoal e a raiz do
+// disco nunca contam; sem projeto, vale só a pasta da própria spec.
+export function dataRoot(baseDir) {
+  const start = resolve(baseDir);
+  const home = resolve(homedir());
+  const global = resolve(globalDir());
+  for (let dir = start; ; dir = dirname(dir)) {
+    if (samePath(dir, home) || dirname(dir) === dir) return start;
+    if (existsSync(join(dir, '.git'))) return dir;
+    if (!samePath(join(dir, '.seecode'), global) && existsSync(join(dir, '.seecode', 'config.json'))) return dir;
+  }
+}
 
 // `p` dentro de `root` (o próprio root conta), sem subir de pasta nem trocar de drive.
 export function isInside(root, p) {
@@ -13,7 +31,7 @@ export function isInside(root, p) {
 }
 
 // Arquivo de dados citado por uma spec: relativo, dentro do projeto da spec
-// (a pasta com .git ou .seecode, ou a própria pasta da spec), com links
+// (dataRoot: pasta com .git ou .seecode de projeto, ou a da spec), com links
 // simbólicos resolvidos, e só csv/tsv/json. Uma spec de terceiros não pode
 // puxar ~/.ssh, um .env ou outro arquivo do disco para dentro do diagrama.
 export function dataPath(baseDir, file) {
@@ -25,7 +43,7 @@ export function dataPath(baseDir, file) {
   if (name.split(/[\\/]+/).some((s) => (s.startsWith('.') && s !== '.' && s !== '..') || s === 'node_modules')) {
     throw new Error(`arquivo de dados não pode estar em pasta ou arquivo oculto nem em node_modules: ${name}`);
   }
-  const root = projectRoot(baseDir);
+  const root = dataRoot(baseDir);
   const target = resolve(baseDir, name);
   let real = target;
   try { real = realpathSync(target); } catch { /* inexistente: a leitura falha com a mensagem normal */ }

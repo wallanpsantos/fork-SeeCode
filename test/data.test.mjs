@@ -70,3 +70,27 @@ test('a spec that itself lives in a hidden folder can still read its own data', 
   const r = renderSpec({ type: 'bar', title: 'T', data: 'sales.csv' }, { specPath: join(root, 'proj/.github/diagrams/chart.json') });
   assert.equal(r.ok, true, JSON.stringify(r.problems));
 });
+
+test('the home folder and the global ~/.seecode config never widen the data root', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sc-fakehome-'));
+  mkdirSync(join(home, '.seecode'));
+  writeFileSync(join(home, '.seecode/config.json'), '{}');
+  mkdirSync(join(home, 'Documents'));
+  writeFileSync(join(home, 'Documents/finances.csv'), 'item,v\nsalary,1\n');
+  mkdirSync(join(home, 'downloads/specs'), { recursive: true });
+  writeFileSync(join(home, 'downloads/specs/own.csv'), 'item,v\na,1\n');
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SEECODE_HOME: process.env.SEECODE_HOME };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.SEECODE_HOME;
+  try {
+    const at = join(home, 'downloads/specs/chart.json');
+    const out = renderSpec({ type: 'bar', title: 'T', data: '../../Documents/finances.csv' }, { specPath: at });
+    assert.equal(out.ok, false);
+    assert.match(out.problems[0].msg, /fora do projeto/);
+    // sem projeto, a pasta da própria spec continua valendo
+    assert.equal(renderSpec({ type: 'bar', title: 'T', data: 'own.csv' }, { specPath: at }).ok, true);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+});
