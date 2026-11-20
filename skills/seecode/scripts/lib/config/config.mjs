@@ -77,6 +77,16 @@ function cleanRoles(roles, label) {
   return clean;
 }
 
+// Toda url() de um @font-face precisa ser https. Escapes CSS (\75rl() e
+// URL( em maiúsculas também são url() para o navegador, então uma regra com
+// barra invertida é recusada e a busca ignora a caixa; uma url( sem fechar
+// também reprova.
+function httpsUrlsOnly(face) {
+  if (face.includes('\\')) return false;
+  const urls = [...face.matchAll(/url\(([^)]*)\)/gi)].map((m) => m[1].trim().replace(/^["']|["']$/g, ''));
+  return urls.length === (face.match(/url\(/gi) || []).length && urls.every((u) => u.startsWith('https://'));
+}
+
 // Fonts are stored as data, then sanitised: plain family names, Google Fonts
 // stylesheet URLs, and @font-face rules whose files are https URLs.
 export function cleanFonts(fonts) {
@@ -90,7 +100,7 @@ export function cleanFonts(fonts) {
   const href = [].concat(fonts.href || []).filter((h) => /^https:\/\/fonts\.googleapis\.com\/css2\?[\w+:;@.,&=%-]+$/.test(h)).slice(0, 4);
   if (href.length) out.href = href;
   const faces = (String(fonts.faces || '').match(/@font-face\s*\{[^{}<]*\}/g) || [])
-    .filter((f) => !/(<\/style|<script|javascript:|expression\(|@import)/i.test(f) && [...f.matchAll(/url\(\s*"?([^")]+)"?\s*\)/g)].every((m) => /^https:\/\//.test(m[1])))
+    .filter((f) => !/(<\/style|<script|javascript:|expression\(|@import)/i.test(f) && httpsUrlsOnly(f))
     .join('').slice(0, 20000);
   if (faces) out.faces = faces;
   return Object.keys(out).length ? out : null;
@@ -151,18 +161,31 @@ export function status(cwd) {
   const proj = readJson(p.project);
   let state = 'first-run';
   if (proj) state = proj.inherit === 'global' ? 'inherits-global' : 'project';
-  const own = proj && proj.inherit !== 'global' ? proj : {};
-  const settings = { ...DEFAULTS, ...(g || {}), ...own };
+  const own = proj && proj.inherit !== 'global' ? proj : null;
+  const settings = { ...DEFAULTS, ...g, ...own };
   delete settings.inherit;
-  // o valor global (escolhido pelo próprio usuário) continua valendo quando o
-  // init o copiou para o projeto
-  if (own.outputDir !== undefined && own.outputDir !== g?.outputDir && !isProjectRelative(own.outputDir)) settings.outputDir = g?.outputDir ?? DEFAULTS.outputDir;
-  const profile = loadProfile(settings.profile);
-  const fromProfile = profile ? { ...(profile.brand || {}), ...(profile.dark ? { dark: profile.dark } : {}), ...(profile.fonts ? { fonts: profile.fonts } : {}) } : {};
-  const brand = cleanBrand({ ...fromProfile, ...(settings.brand && typeof settings.brand === 'object' ? settings.brand : {}) });
+  settings.outputDir = safeOutputDir(own, g, settings.outputDir);
+  const brand = cleanBrand(mergedBrand(loadProfile(settings.profile), settings.brand));
   if (brand) settings.brand = brand;
   else delete settings.brand;
   return { state, root: p.root, hasGlobal: !!g, settings };
+}
+
+// O outputDir de um projeto só vale se for relativo e sem "..". O valor
+// global (escolhido pelo próprio usuário) continua valendo quando o init o
+// copiou para o projeto.
+function safeOutputDir(own, global, current) {
+  const dir = own?.outputDir;
+  if (dir === undefined || dir === global?.outputDir || isProjectRelative(dir)) return current;
+  return global?.outputDir ?? DEFAULTS.outputDir;
+}
+
+// Perfil salvo + brand dos configs; o resultado ainda passa por cleanBrand.
+function mergedBrand(profile, fromConfig) {
+  const merged = {};
+  if (profile) Object.assign(merged, profile.brand, profile.dark && { dark: profile.dark }, profile.fonts && { fonts: profile.fonts });
+  if (fromConfig && typeof fromConfig === 'object') Object.assign(merged, fromConfig);
+  return merged;
 }
 
 export function init(cwd, use) {

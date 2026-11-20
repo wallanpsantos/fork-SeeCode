@@ -30,6 +30,17 @@ export function slugify(s) {
   return slug || 'diagram';
 }
 
+// Fontes de cada nó, agrupadas pelo id. Objeto sem protótipo: um id
+// "__proto__" ou "constructor" é só mais uma chave.
+function evidenceById(list = []) {
+  const out = Object.create(null);
+  for (const e of list) {
+    if (!out[e.id]) out[e.id] = [];
+    out[e.id].push({ file: e.file, line: e.line, note: e.note });
+  }
+  return out;
+}
+
 // Right-to-left scripts flip the page chrome; the diagram keeps its geometry.
 const RTL = new Set(['ar', 'he', 'fa', 'ur', 'ps', 'yi', 'dv', 'ckb', 'sd', 'ug']);
 export const isRtl = (lang) => RTL.has(String(lang || '').split('-')[0].toLowerCase());
@@ -110,7 +121,7 @@ export function buildPage({ spec, result, preset, typeName, settings = {} }) {
 ${webFonts ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link id="sc-fonts" rel="stylesheet" href="${esc(FONTS_HREF)}${sketchy ? '&amp;family=Kalam:wght@400;700' : ''}">` : ''}${(brandFonts.href || []).map((h) => `
 <link class="sc-brand-fonts" rel="stylesheet" href="${esc(h)}">`).join('')}${brandFonts.faces ? `
-<style id="sc-brand-faces">${String(brandFonts.faces).replace(/<\/(style)/gi, '<\\/$1')}</style>` : ''}
+<style id="sc-brand-faces">${String(brandFonts.faces).replace(/<\/(style)/gi, String.raw`<\/$1`)}</style>` : ''}
 <style>${skinCss({ skin: spec.skin || settings.skin || 'light', brand })}
 :root{--sc-max:${SIZE_MAX[spec.size || 'auto'] || 1200}px}
 ${VIEWER_CSS}</style>
@@ -121,8 +132,7 @@ ${VIEWER_CSS}</style>
     type: typeName,
     groups: Object.fromEntries((result.graph?.nodes || []).filter((n) => n.group).map((n) => [n.id, n.group])),
     labels: legendLabels(spec),
-    // objeto sem protótipo: um id "__proto__" ou "constructor" é só mais uma chave
-    evidence: (spec.evidence || []).reduce((m, e) => ((m[e.id] = m[e.id] || []).push({ file: e.file, line: e.line, note: e.note }), m), Object.create(null)),
+    evidence: evidenceById(spec.evidence),
   }).replace(/</g, '\\u003c')}</script>
 </head>
 <body>

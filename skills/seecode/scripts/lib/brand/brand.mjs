@@ -58,7 +58,7 @@ export function tagsNamed(html, name) {
   return out;
 }
 
-const attr = (tag, name) => (new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`, 'i').exec(tag) || [])[1];
+const attr = (tag, name) => (new RegExp(String.raw`\s${name}\s*=\s*["']([^"']*)["']`, 'i').exec(tag) || [])[1];
 
 export function stripCssComments(css) {
   let out = '';
@@ -118,15 +118,28 @@ async function fromUrl(url, net) {
     .filter(Boolean)
     .filter((h) => !/fonts\.googleapis|use\.typekit|fontawesome/i.test(h))
     .slice(0, 6);
-  for (const href of sheets) {
-    let abs;
-    try { abs = new URL(href.replace(/&amp;/g, '&'), url); } catch { continue; }
-    if (!/^https?:$/.test(abs.protocol)) continue;
-    if (!allowPrivate && isPrivateHost(abs.hostname)) continue;
-    try { docs.push({ from: abs.href, kind: 'css', text: await get(abs.href, { allowPrivate, net }) }); } catch { /* unreachable or blocked sheet: skip */ }
-  }
+  // até 6 folhas, buscadas juntas; a ordem dos docs segue a da página
+  const fetched = await Promise.all(sheets.map((href) => sheet(href, url, { allowPrivate, net })));
+  docs.push(...fetched.filter(Boolean));
   return { docs, themeColor: theme && norm(theme) };
 }
+
+async function sheet(href, pageUrl, { allowPrivate, net }) {
+  let abs;
+  try { abs = new URL(href.replaceAll('&amp;', '&'), pageUrl); } catch { return null; }
+  if (!/^https?:$/.test(abs.protocol)) return null;
+  if (!allowPrivate && isPrivateHost(abs.hostname)) return null;
+  try {
+    return { from: abs.href, kind: 'css', text: await get(abs.href, { allowPrivate, net }) };
+  } catch {
+    return null; // folha inacessível ou bloqueada: ignora
+  }
+}
+
+// `primary: '#…'`, `"brand-500": "rgb(…)"` em arquivos de tema/tailwind: a
+// chave e o valor entre aspas, depois só o que for cor
+const TOKEN_RE = /["']?([A-Za-z][\w-]{0,63})["']?\s{0,16}:\s{0,16}["']([^"'\n]{1,90})["']/g;
+const COLOR_LITERAL = /^(#[0-9a-f]{3,8}|rgba?\(|hsla?\()/i;
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage', 'vendor', '.seecode', 'diagrams']);
 const WANT = /\.(css|scss|sass|less|html?)$|(^|\/)(tailwind\.config|theme|tokens|colors|design-tokens)[^/]*\.(js|cjs|mjs|ts|json)$/i;
@@ -162,8 +175,8 @@ function scan(docs) {
     if (d.kind === 'html') css = tagBlocks(d.text, 'style').join('\n');
     if (d.kind === 'tokens') {
       // tailwind / theme files: `primary: '#…'`, `"brand-500": "#…"`, nested keys flattened by name
-      for (const m of d.text.matchAll(/["']?([A-Za-z][\w-]{0,63})["']?\s{0,16}:\s{0,16}["'](#[0-9a-fA-F]{3,8}|rgba?\([^)]{0,80}\)|hsla?\([^)]{0,80}\))["']/g)) {
-        const c = norm(m[2]);
+      for (const m of d.text.matchAll(TOKEN_RE)) {
+        const c = COLOR_LITERAL.test(m[2]) && norm(m[2]);
         if (!c) continue;
         props.set(`--${m[1].toLowerCase()}`, { value: c, from: d.from });
         count(c);
@@ -198,7 +211,7 @@ function scan(docs) {
         }
         if (prop === 'font-family' || prop === 'font') fonts.push({ sel, value: prop === 'font' ? value.replace(/^.*?\d[\w.%]*(?:\/[\w.%]+)?\s+/, '') : value, from: d.from });
         if (!/color|background|fill|stroke|border/.test(prop)) continue;
-        const v = value.replace(VAR_RE, (_, n) => (props.get(n.toLowerCase()) || {}).value || '');
+        const v = value.replace(VAR_RE, (_, n) => props.get(n.toLowerCase())?.value || '');
         for (const raw of v.match(COLOR_RE) || []) {
           const p = parse(raw);
           if (!p || p.a < 0.6) continue;

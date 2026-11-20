@@ -14,21 +14,28 @@ import https from 'node:https';
 import { gunzipSync, inflateSync, brotliDecompressSync } from 'node:zlib';
 
 // Faixas de uso especial (IANA) que uma URL vinda de fora nunca deve alcançar.
+// Estes endereços são a própria lista de bloqueio, não destinos de conexão.
+const BLOCKED_V4 = [
+  '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16',
+  '172.16.0.0/12', '192.0.0.0/24', '192.0.2.0/24', '192.88.99.0/24', '192.168.0.0/16',
+  '198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '224.0.0.0/4', '240.0.0.0/4',
+];
+const BLOCKED_V6 = [
+  '::/96', // não especificado, loopback e IPv4-compatível (::7f00:1)
+  '64:ff9b::/96', '64:ff9b:1::/48', // NAT64
+  '100::/64', // descarte
+  '2001::/32', // Teredo (carrega um IPv4)
+  '2001:db8::/32', // documentação
+  '2002::/16', // 6to4 (carrega um IPv4)
+  'fc00::/7', 'fe80::/10', 'fec0::/10', 'ff00::/8',
+];
 const BLOCKED = new BlockList();
-for (const [net, prefix] of [
-  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
-  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16],
-  ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
-]) BLOCKED.addSubnet(net, prefix, 'ipv4');
-for (const [net, prefix] of [
-  ['::', 96], // não especificado, loopback e IPv4-compatível (::7f00:1)
-  ['64:ff9b::', 96], ['64:ff9b:1::', 48], // NAT64
-  ['100::', 64], // descarte
-  ['2001::', 32], // Teredo (carrega um IPv4)
-  ['2001:db8::', 32], // documentação
-  ['2002::', 16], // 6to4 (carrega um IPv4)
-  ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
-]) BLOCKED.addSubnet(net, prefix, 'ipv6');
+for (const [family, list] of [['ipv4', BLOCKED_V4], ['ipv6', BLOCKED_V6]]) {
+  for (const cidr of list) {
+    const [net, prefix] = cidr.split('/');
+    BLOCKED.addSubnet(net, Number(prefix), family);
+  }
+}
 
 const bare = (h) => String(h || '').toLowerCase().replace(/^\[|\]$/g, '');
 
@@ -74,13 +81,7 @@ export async function safeFetch(url, opts = {}) {
   const deadline = Date.now() + timeoutMs;
   let cur = new URL(url);
   for (let hops = 0; ; hops++) {
-    if (httpsOnly ? cur.protocol !== 'https:' : !/^https?:$/.test(cur.protocol)) {
-      throw new Error(`unsupported scheme: ${cur.protocol}`);
-    }
-    const host = bare(cur.hostname);
-    if (!allowPrivate && (isIP(host) ? isBlocked(host) : isPrivateHost(host))) {
-      throw new Error(`blocked private host: ${cur.hostname}`);
-    }
+    assertTarget(cur, { httpsOnly, allowPrivate, isBlocked });
     const res = await request(cur, { allowPrivate, headers, lookup, isBlocked, maxBytes, overflow, deadline });
     if (REDIRECTS.has(res.status) && res.location) {
       if (hops >= maxRedirects) throw new Error(`HTTP ${res.status}: too many redirects`);
@@ -89,6 +90,17 @@ export async function safeFetch(url, opts = {}) {
     }
     return new Response(NULL_BODY.has(res.status) ? null : res.body, { status: res.status, headers: res.headers });
   }
+}
+
+// Esquema permitido e host que não seja sabidamente interno (antes do DNS);
+// vale para a URL inicial e para cada redirect.
+function assertTarget(url, { httpsOnly, allowPrivate, isBlocked }) {
+  const okScheme = httpsOnly ? url.protocol === 'https:' : /^https?:$/.test(url.protocol);
+  if (!okScheme) throw new Error(`unsupported scheme: ${url.protocol}`);
+  if (allowPrivate) return;
+  const host = bare(url.hostname);
+  const internal = isIP(host) ? isBlocked(host) : isPrivateHost(host);
+  if (internal) throw new Error(`blocked private host: ${url.hostname}`);
 }
 
 function request(url, { allowPrivate, headers, lookup, isBlocked, maxBytes, overflow, deadline }) {
@@ -168,7 +180,7 @@ function toHeaders(raw) {
   const h = new Headers();
   for (const [k, v] of Object.entries(raw)) {
     if (v === undefined || k === 'content-encoding' || k === 'content-length') continue;
-    for (const x of [].concat(v)) {
+    for (const x of [v].flat()) {
       try { h.append(k, x); } catch { /* cabeçalho inválido: ignora */ }
     }
   }

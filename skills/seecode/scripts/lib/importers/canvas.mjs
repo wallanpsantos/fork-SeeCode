@@ -42,8 +42,9 @@ export function extractDrawioXml(buf, name) {
         const nul = data.indexOf(0);
         const key = data.toString('latin1', 0, nul);
         if (key === 'mxfile' || key === 'mxGraphModel') {
-          let val = type === 'zTXt' ? inflateSync(data.subarray(nul + 2), INFLATE).toString('utf8') : data.toString('utf8', type === 'iTXt' ? data.indexOf(0, nul + 3) + 1 : nul + 1);
-          return decodeURIComponent(val);
+          if (type === 'zTXt') return decodeURIComponent(inflateSync(data.subarray(nul + 2), INFLATE).toString('utf8'));
+          const from = type === 'iTXt' ? data.indexOf(0, nul + 3) + 1 : nul + 1;
+          return decodeURIComponent(data.toString('utf8', from));
         }
       }
       p += 12 + len;

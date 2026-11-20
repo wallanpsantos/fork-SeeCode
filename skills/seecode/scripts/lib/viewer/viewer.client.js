@@ -18,7 +18,7 @@
   if (params.get('embed')) document.body.classList.add('sc-embed');
   const meta = (() => { try { return JSON.parse(($('#sc-meta') || {}).textContent || '{}'); } catch (e) { return {}; } })();
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const own = (o, k) => (o && Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
+  const own = (o, k) => (o && Object.hasOwn(o, k) ? o[k] : undefined);
 
   // ---- theme ---------------------------------------------------------------
   // Dark-mode switch. Until the reader flips it, the diagram follows the system
@@ -226,7 +226,7 @@
     return node;
   }
   function token(e) {
-    if (!e.d || !animated() || !/^[0-9eE.,+\-\sA-Za-z]+$/.test(e.d)) return;
+    if (!e.d || !animated() || !/^[\d.,+\-\sA-Za-z]+$/.test(e.d)) return;
     const g = document.createElementNS(NS, 'g');
     const k = tokenKind(e);
     g.setAttribute('class', `sc-ftok tk-${k}`);

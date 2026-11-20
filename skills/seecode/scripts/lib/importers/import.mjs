@@ -251,24 +251,29 @@ function importData(path, format, source, stem, out, flags) {
   } catch (e) {
     return { ok: false, error: `parse failed: ${String(e.message).split('\n')[0]}`, fix: 'read the file yourself and write a spec by hand (say no parser was used)' };
   }
-  // o render só lê dados de dentro do projeto da spec: um arquivo de fora
-  // (ex.: ~/Downloads/vendas.csv) é copiado para junto da spec
-  let dataFile = path;
-  let copied = false;
-  try {
-    dataPath(dirname(out), relative(dirname(out), path));
-  } catch {
-    const ext = ['.csv', '.tsv', '.json'].includes(extname(path).toLowerCase()) ? extname(path).toLowerCase() : format === 'json' ? '.json' : '.csv';
-    dataFile = join(dirname(out), `${basename(out, extname(out))}.data${ext}`);
-    mkdirSync(dirname(out), { recursive: true });
-    copyFileSync(path, dataFile);
-    copied = true;
-  }
-  const rel = relative(dirname(out), dataFile).split('\\').join('/');
+  const { dataFile, copied } = dataFileFor(path, out, format);
+  const rel = relative(dirname(out), dataFile).replaceAll('\\', '/');
   const r = inferData(rows, rel, stem);
   if (r.error) return { ok: false, error: r.error, fix: 'write a chart spec by hand; see references/types/bar.md' };
   notes.push(`data ${copied ? 'copied to' : 'stays in'} ${rel} (${rows.length} rows); chart chosen because: ${r.why}`);
   return finish(r.spec, out, format, notes, flags);
+}
+
+// O render só lê dados de dentro do projeto da spec: um arquivo de fora
+// (ex.: ~/Downloads/vendas.csv) é copiado para junto da spec.
+function dataFileFor(path, out, format) {
+  try {
+    dataPath(dirname(out), relative(dirname(out), path));
+    return { dataFile: path, copied: false };
+  } catch {
+    const own = extname(path).toLowerCase();
+    let ext = format === 'json' ? '.json' : '.csv';
+    if (['.csv', '.tsv', '.json'].includes(own)) ext = own;
+    const dataFile = join(dirname(out), `${basename(out, extname(out))}.data${ext}`);
+    mkdirSync(dirname(out), { recursive: true });
+    copyFileSync(path, dataFile);
+    return { dataFile, copied: true };
+  }
 }
 
 function finish(specIn, out, format, notes, flags) {

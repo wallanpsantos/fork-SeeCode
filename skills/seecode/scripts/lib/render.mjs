@@ -146,8 +146,21 @@ export function outPathFor(spec, specPath, settings = {}) {
   return resolve(settings.outputDir || 'seecode-out', 'diagram.html');
 }
 
-const realOrSelf = (p) => { try { return realpathSync(p); } catch { return p; } };
-const nearestExisting = (p) => { let d = p; while (!existsSync(d) && dirname(d) !== d) d = dirname(d); return d; };
+function realOrSelf(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+function nearestExisting(p) {
+  let d = p;
+  while (!existsSync(d) && dirname(d) !== d) {
+    d = dirname(d);
+  }
+  return d;
+}
 
 export function writeAtomic(path, content) {
   mkdirSync(dirname(path), { recursive: true });

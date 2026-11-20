@@ -90,3 +90,13 @@ test('an absolute outputDir chosen in the global config still works per project'
   config.init(proj, 'project');
   assert.equal(config.status(proj).settings.outputDir, abs);
 });
+
+test('brand @font-face rules may only load https files, however url() is spelled', () => {
+  const face = (src) => `@font-face{font-family:A;src:${src}}`;
+  const keep = (src) => config.cleanFonts({ faces: face(src) })?.faces;
+  assert.ok(keep('url("https://ok.example/a.woff2")'));
+  assert.ok(keep("url( 'https://ok.example/a.woff2' ) format('woff2')"));
+  for (const src of ['URL(http://plain.example/a.woff2)', String.raw`\75rl(http://plain.example/a.woff2)`, 'url(http://plain.example/a.woff2', 'url(https://ok.example/a.woff2),url(http://plain.example/b.woff2)']) {
+    assert.equal(keep(src), undefined, src);
+  }
+});
