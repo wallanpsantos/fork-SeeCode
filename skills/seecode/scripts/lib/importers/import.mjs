@@ -2,7 +2,7 @@
 // a ready-to-render draft spec in the best-fit SeeCode type. Prints a compact
 // digest (counts, ids, notes) so the agent can patch layout without reading
 // the source or the draft in full.
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from 'node:fs';
 import { basename, extname, dirname, resolve, relative, join } from 'node:path';
 import { parseMermaid } from './mermaid.mjs';
 import { parseDot } from './dot.mjs';
@@ -12,7 +12,7 @@ import { parseDrawio, parseExcalidraw, extractDrawioXml } from './canvas.mjs';
 import { splitUnits } from './units.mjs';
 import { slugify } from '../page.mjs';
 import { parseStructurizr, parseBpmn, parseSql, parsePrisma, parseDbml, parseOpenApi } from './models.mjs';
-import { readTable } from '../data.mjs';
+import { readTable, dataPath } from '../data.mjs';
 import { clean } from './common.mjs';
 import { compactJson, renderSpec } from '../render.mjs';
 import { status as configStatus } from '../config/config.mjs';
@@ -251,10 +251,23 @@ function importData(path, format, source, stem, out, flags) {
   } catch (e) {
     return { ok: false, error: `parse failed: ${String(e.message).split('\n')[0]}`, fix: 'read the file yourself and write a spec by hand (say no parser was used)' };
   }
-  const rel = relative(dirname(out), path).split('\\').join('/');
+  // o render só lê dados de dentro do projeto da spec: um arquivo de fora
+  // (ex.: ~/Downloads/vendas.csv) é copiado para junto da spec
+  let dataFile = path;
+  let copied = false;
+  try {
+    dataPath(dirname(out), relative(dirname(out), path));
+  } catch {
+    const ext = ['.csv', '.tsv', '.json'].includes(extname(path).toLowerCase()) ? extname(path).toLowerCase() : format === 'json' ? '.json' : '.csv';
+    dataFile = join(dirname(out), `${basename(out, extname(out))}.data${ext}`);
+    mkdirSync(dirname(out), { recursive: true });
+    copyFileSync(path, dataFile);
+    copied = true;
+  }
+  const rel = relative(dirname(out), dataFile).split('\\').join('/');
   const r = inferData(rows, rel, stem);
   if (r.error) return { ok: false, error: r.error, fix: 'write a chart spec by hand; see references/types/bar.md' };
-  notes.push(`data stays in ${rel} (${rows.length} rows); chart chosen because: ${r.why}`);
+  notes.push(`data ${copied ? 'copied to' : 'stays in'} ${rel} (${rows.length} rows); chart chosen because: ${r.why}`);
   return finish(r.spec, out, format, notes, flags);
 }
 
