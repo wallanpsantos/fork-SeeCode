@@ -212,18 +212,24 @@
     return 'call';
   }
   const GLYPHS = {
-    data: '<rect x="-5" y="-4" width="10" height="8" rx="2" class="t-shape"/><path d="M-2.8-1.2h5.6M-2.8 1.4h3.8" class="t-ink"/>',
-    event: '<rect x="-7" y="-3" width="4" height="6" rx="1" class="t-shape"/><rect x="-2" y="-3" width="4" height="6" rx="1" class="t-shape"/><rect x="3" y="-3" width="4" height="6" rx="1" class="t-shape"/>',
-    security: '<path d="M0-5 4-3.4V0c0 3-1.6 4.5-4 5.5C-2.4 4.5-4 3-4 0v-3.4Z" class="t-shape"/><path d="m-2 .2 1.4 1.4L2-1.4" class="t-ink"/>',
-    state: '<circle r="5" class="t-shape"/><circle r="1.4" class="t-dot"/>',
-    call: '<path d="M-5-3-1 0-5 3M0-3 4 0 0 3" class="t-ink t-wide"/>',
+    data: [['rect', { x: '-5', y: '-4', width: '10', height: '8', rx: '2', class: 't-shape' }], ['path', { d: 'M-2.8-1.2h5.6M-2.8 1.4h3.8', class: 't-ink' }]],
+    event: [['rect', { x: '-7', y: '-3', width: '4', height: '6', rx: '1', class: 't-shape' }], ['rect', { x: '-2', y: '-3', width: '4', height: '6', rx: '1', class: 't-shape' }], ['rect', { x: '3', y: '-3', width: '4', height: '6', rx: '1', class: 't-shape' }]],
+    security: [['path', { d: 'M0-5 4-3.4V0c0 3-1.6 4.5-4 5.5C-2.4 4.5-4 3-4 0v-3.4Z', class: 't-shape' }], ['path', { d: 'm-2 .2 1.4 1.4L2-1.4', class: 't-ink' }]],
+    state: [['circle', { r: '5', class: 't-shape' }], ['circle', { r: '1.4', class: 't-dot' }]],
+    call: [['path', { d: 'M-5-3-1 0-5 3M0-3 4 0 0 3', class: 't-ink t-wide' }]],
   };
+  function svgEl(tag, attrs) {
+    const node = document.createElementNS(NS, tag);
+    for (const [key, val] of Object.entries(attrs)) node.setAttribute(key, val);
+    return node;
+  }
   function token(e) {
-    if (!e.d || !animated()) return;
+    if (!e.d || !animated() || !/^[0-9eE.,+\-\sA-Za-z]+$/.test(e.d)) return;
     const g = document.createElementNS(NS, 'g');
     const k = tokenKind(e);
     g.setAttribute('class', `sc-ftok tk-${k}`);
-    g.innerHTML = `<circle r="8" class="t-halo"/>${GLYPHS[k]}`;
+    g.appendChild(svgEl('circle', { r: '8', class: 't-halo' }));
+    for (const [tag, attrs] of GLYPHS[k]) g.appendChild(svgEl(tag, attrs));
     g.style.offsetPath = `path('${e.d}')`;
     overlayLayer().appendChild(g);
     g.addEventListener('animationend', () => g.remove(), { once: true });
@@ -310,14 +316,15 @@
   // ---- side panel (passport + journey) ------------------------------------
   function openPanel(html) {
     if (!panel) return;
-    panel.innerHTML = html;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    panel.replaceChildren(...doc.body.childNodes);
     panel.hidden = false;
     stage.style.minHeight = `${panel.offsetHeight + 32}px`;
   }
   function closePanel() {
     if (!panel) return;
     panel.hidden = true;
-    panel.innerHTML = '';
+    panel.replaceChildren();
     stage.style.minHeight = '';
   }
 
@@ -597,7 +604,17 @@
     const ekinds = [...new Set(edges.map((e) => e.kind))].filter((k) => EDGE_NAMES[k] && k !== 'default');
     if (kinds.length + ekinds.length < 2) lens.hidden = true;
     const list = lens.querySelector('.sc-menu-list');
-    list.innerHTML = kinds.map((k) => `<button data-k="${k}" role="menuitem">${esc(KIND_NAMES[k])}</button>`).join('') + ekinds.map((k) => `<button data-ek="${k}" role="menuitem">${esc(LABELS[k] || `${EDGE_NAMES[k]} edges`)}</button>`).join('');
+    const mkLensItem = (attr, key, text) => {
+      const btn = document.createElement('button');
+      btn.setAttribute(attr, key);
+      btn.setAttribute('role', 'menuitem');
+      btn.textContent = text;
+      return btn;
+    };
+    list.replaceChildren(
+      ...kinds.map((k) => mkLensItem('data-k', k, KIND_NAMES[k])),
+      ...ekinds.map((k) => mkLensItem('data-ek', k, LABELS[k] || `${EDGE_NAMES[k]} edges`)),
+    );
     lens.querySelector('[data-sc-action="lens"]').addEventListener('click', (ev) => { ev.stopPropagation(); lens.classList.toggle('is-open'); });
     list.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { lens.classList.remove('is-open'); applyLens(b.getAttribute('data-k'), b.getAttribute('data-ek'), b.textContent); }));
     document.addEventListener('click', () => lens.classList.remove('is-open'));

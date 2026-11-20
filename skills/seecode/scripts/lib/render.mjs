@@ -1,7 +1,7 @@
 // Spec → HTML pipeline used by `seecode.mjs render|validate`.
 import { setWidthScale } from './text.mjs';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
-import { dirname, resolve, basename, extname, join } from 'node:path';
+import { dirname, resolve, basename, extname, join, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validate } from './schema.mjs';
 import { TYPES, typeInfo, resolveAlias, ALIASES } from './types.mjs';
@@ -26,12 +26,15 @@ function loadSchema(name) {
 // - an array of {id,…} objects can be patched by an object keyed by id
 //   ({"nodes":{"api":{"col":3},"old":null,"new1":{…}}});
 // - tuple arrays (edges/messages/links) accept {"add":[…],"remove":["a>b"|index]}.
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 export function mergePatch(target, patch) {
   if (patch === null || typeof patch !== 'object') return patch;
   if (Array.isArray(patch)) return patch;
   if (Array.isArray(target)) return patchArray(target, patch);
   const out = target && typeof target === 'object' ? { ...target } : {};
   for (const [k, v] of Object.entries(patch)) {
+    if (UNSAFE_KEYS.has(k)) continue;
     if (v === null) delete out[k];
     else out[k] = mergePatch(out[k], v);
   }
@@ -50,6 +53,7 @@ function patchArray(arr, patch) {
   }
   const out = arr.map((it) => ({ ...it }));
   for (const [id, v] of Object.entries(patch)) {
+    if (UNSAFE_KEYS.has(id)) continue;
     const i = out.findIndex((it) => it && it.id === id);
     if (v === null) { if (i >= 0) out.splice(i, 1); }
     else if (i >= 0) out[i] = mergePatch(out[i], v);
@@ -118,7 +122,15 @@ function dedupe(problems) {
 }
 
 export function outPathFor(spec, specPath, settings = {}) {
-  if (spec.out) return resolve(specPath ? dirname(specPath) : process.cwd(), spec.out);
+  if (spec.out) {
+    const base = resolve(specPath ? dirname(specPath) : process.cwd());
+    const target = resolve(base, spec.out);
+    const rel = relative(base, target);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+      throw new Error('spec.out deve permanecer dentro do diretório de saída');
+    }
+    return target;
+  }
   if (specPath) return join(dirname(specPath), `${basename(specPath, extname(specPath)).replace(/\.spec$/, '')}.html`);
   return resolve(settings.outputDir || 'seecode-out', 'diagram.html');
 }

@@ -55,8 +55,10 @@ export function paths(cwd) {
   return { root, project: join(root, '.seecode', 'config.json'), global: join(globalDir(), 'config.json'), profiles: join(globalDir(), 'profiles') };
 }
 
+const PROFILE_SLUG = /^[a-z0-9][a-z0-9-]{0,40}$/;
+
 export function loadProfile(slug) {
-  if (!slug) return null;
+  if (!slug || !PROFILE_SLUG.test(String(slug))) return null;
   return readJson(join(globalDir(), 'profiles', `${slug}.json`));
 }
 
@@ -87,14 +89,14 @@ export function cleanFonts(fonts) {
   const href = [].concat(fonts.href || []).filter((h) => /^https:\/\/fonts\.googleapis\.com\/css2\?[\w+:;@.,&=%-]+$/.test(h)).slice(0, 4);
   if (href.length) out.href = href;
   const faces = (String(fonts.faces || '').match(/@font-face\s*\{[^{}<]*\}/g) || [])
-    .filter((f) => !/javascript:|expression\(|@import/i.test(f) && [...f.matchAll(/url\(\s*"?([^")]+)"?\s*\)/g)].every((m) => /^https:\/\//.test(m[1])))
+    .filter((f) => !/(<\/style|<script|javascript:|expression\(|@import)/i.test(f) && [...f.matchAll(/url\(\s*"?([^")]+)"?\s*\)/g)].every((m) => /^https:\/\//.test(m[1])))
     .join('').slice(0, 20000);
   if (faces) out.faces = faces;
   return Object.keys(out).length ? out : null;
 }
 
 export function saveProfile(slug, brand, { dark, source, fonts } = {}) {
-  if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(slug)) throw new Error('profile slug must be lowercase letters, digits, dashes');
+  if (!PROFILE_SLUG.test(slug)) throw new Error('profile slug must be lowercase letters, digits, dashes');
   const clean = cleanRoles(brand, '');
   if (!Object.keys(clean).length) throw new Error(`give at least one of --${BRAND_KEYS.join(', --')}`);
   const file = join(globalDir(), 'profiles', `${slug}.json`);

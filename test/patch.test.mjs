@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergePatch, compactJson } from '../skills/seecode/scripts/lib/render.mjs';
+import { mergePatch, compactJson, outPathFor } from '../skills/seecode/scripts/lib/render.mjs';
 
 const spec = { type: 'architecture', nodes: [{ id: 'a', label: 'A', row: 0, col: 0 }, { id: 'b', label: 'B', row: 0, col: 1 }], edges: [['a', 'b', 'x']] };
 
@@ -23,4 +23,13 @@ test('compactJson keeps short items on one line and round-trips', () => {
   const s = compactJson(spec);
   assert.deepEqual(JSON.parse(s), spec);
   assert.ok(s.includes('{"id":"a","label":"A","row":0,"col":0}'));
+});
+
+test('mergePatch ignores prototype-pollution keys and outPathFor blocks traversal', () => {
+  const payload = JSON.parse('{"__proto__":{"polluted":true},"constructor":{"prototype":{"x":1}},"ok":1}');
+  const out = mergePatch({}, payload);
+  assert.equal({}.polluted, undefined);
+  assert.equal(out.ok, 1);
+  assert.throws(() => outPathFor({ out: '../../outside.html' }, '/tmp/work/spec.json'), /diretório de saída/);
+  assert.equal(outPathFor({ out: 'sub/diagram.html' }, '/tmp/work/spec.json').endsWith('diagram.html'), true);
 });

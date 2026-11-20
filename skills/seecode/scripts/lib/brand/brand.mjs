@@ -5,6 +5,7 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, extname, basename, relative } from 'node:path';
 import { parse, norm, toHsl, luminance, contrast, isDark, mix, ensureContrast, TARGETS } from '../color.mjs';
+import { isPrivateHost, safeFetch } from '../net.mjs';
 
 const COLOR_RE = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g;
 const DEFAULT = { lightPaper: '#f6f5f1', lightInk: '#1d2433', darkPaper: '#1a1a1a', darkInk: '#e8e6e3', link: '#0f7f81', darkLink: '#3cc6c4' };
@@ -13,21 +14,20 @@ const FETCH_MS = 10_000;
 
 // ---- collecting sources ----------------------------------------------------
 
-async function get(url) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), FETCH_MS);
-  try {
-    const r = await fetch(url, { signal: ctl.signal, redirect: 'follow', headers: { 'user-agent': 'Mozilla/5.0 (SeeCode brand onboarding)', accept: 'text/html,text/css,*/*' } });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const text = await r.text();
-    return text.slice(0, MAX_BYTES);
-  } finally {
-    clearTimeout(t);
-  }
+async function get(url, { allowPrivate = false } = {}) {
+  const r = await safeFetch(url, {
+    allowPrivate,
+    timeoutMs: FETCH_MS,
+    headers: { 'user-agent': 'Mozilla/5.0 (SeeCode brand onboarding)', accept: 'text/html,text/css,*/*' },
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const text = await r.text();
+  return text.slice(0, MAX_BYTES);
 }
 
 async function fromUrl(url) {
-  const html = await get(url);
+  const allowPrivate = isPrivateHost(new URL(url).hostname);
+  const html = await get(url, { allowPrivate });
   const docs = [{ from: url, kind: 'html', text: html }];
   for (const m of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) docs.push({ from: `${url} <style>`, kind: 'css', text: m[1] });
   const theme = /<meta[^>]+name=["']theme-color["'][^>]*content=["']([^"']+)["']/i.exec(html) || /<meta[^>]+content=["']([^"']+)["'][^>]*name=["']theme-color["']/i.exec(html);
@@ -39,9 +39,10 @@ async function fromUrl(url) {
     .filter((h) => !/fonts\.googleapis|use\.typekit|fontawesome/i.test(h))
     .slice(0, 6);
   for (const href of sheets) {
-    const abs = new URL(href.replace(/&amp;/g, '&'), url).href;
-    if (!/^https?:/.test(abs)) continue;
-    try { docs.push({ from: abs, kind: 'css', text: await get(abs) }); } catch { /* unreachable sheet: skip */ }
+    const abs = new URL(href.replace(/&amp;/g, '&'), url);
+    if (!/^https?:$/.test(abs.protocol)) continue;
+    if (!allowPrivate && isPrivateHost(abs.hostname)) continue;
+    try { docs.push({ from: abs.href, kind: 'css', text: await get(abs.href, { allowPrivate }) }); } catch { /* unreachable sheet: skip */ }
   }
   return { docs, themeColor: theme && norm(theme[1]) };
 }

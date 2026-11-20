@@ -6,6 +6,8 @@ const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 const MAX_FONT_BYTES = 1_500_000;
 
 // Every `family=Name:axes` in the Google Fonts stylesheets the SVG imports.
+import { safeFetch } from '../net.mjs';
+
 export function googleFamilies(svg) {
   const fams = [];
   for (const m of svg.matchAll(/@import url\('(https:\/\/fonts\.googleapis\.com\/css2\?[^']+)'\);/g)) {
@@ -16,7 +18,7 @@ export function googleFamilies(svg) {
 }
 
 const toData = async (src) => {
-  const r = await fetch(src);
+  const r = await safeFetch(src, { httpsOnly: true });
   if (!r.ok) throw new Error(`HTTP ${r.status} for a font file`);
   const buf = Buffer.from(await r.arrayBuffer());
   if (buf.length > MAX_FONT_BYTES) throw new Error('font file too large to embed');
@@ -38,7 +40,9 @@ export async function embedFonts(svg) {
     const used = googleFamilies(svg).filter((f) => !leads.size || leads.has(f.split(':')[0].replace(/\+/g, ' ').toLowerCase()));
     for (const fam of used) {
       const url = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fam).replace(/%20/g, '+').replace(/%3A/gi, ':').replace(/%40/g, '@').replace(/%3B/gi, ';').replace(/%2C/gi, ',')}&text=${encodeURIComponent(text)}&display=swap`;
-      const css = await (await fetch(url, { headers: { 'user-agent': UA } })).text();
+      const res = await safeFetch(url, { httpsOnly: true, headers: { 'user-agent': UA } });
+      if (!res.ok) throw new Error(`HTTP ${res.status} for Google Fonts CSS`);
+      const css = await res.text();
       for (const block of css.match(/@font-face\s*{[^}]*}/g) || []) {
         const src = (block.match(/url\(([^)]+)\)/) || [])[1];
         if (!src) continue;

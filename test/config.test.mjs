@@ -36,3 +36,8 @@ test('list values and unknown keys', () => {
   assert.deepEqual(config.set(proj, 'exportFormats', 'html,gif').settings.exportFormats, ['html', 'gif']);
   assert.throws(() => config.set(proj, 'colour', 'red'), /unknown setting/);
 });
+
+test('loadProfile rejects path traversal slugs', () => {
+  assert.equal(config.loadProfile('../package'), null);
+  assert.equal(config.loadProfile('..\\..\\etc\\passwd'), null);
+});

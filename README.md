@@ -25,6 +25,7 @@
   <a href="skills/seecode/SKILL.md"><img src="https://img.shields.io/badge/Agent-Skill-7C3AED?style=flat-square" alt="Agent Skill" /></a>
   <img src="https://img.shields.io/badge/dependencies-0-22c55e?style=flat-square" alt="Zero dependencies" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="MIT License" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=wallanpsantos_fork-SeeCode"><img src="https://sonarcloud.io/api/project_badges/measure?project=wallanpsantos_fork-SeeCode&metric=alert_status" alt="Quality Gate Status" /></a>
 </p>
 
 <p align="center"><img src="examples/media/export-sample.gif" alt="An architecture diagram building itself step by step, with data flowing along its connections" width="900" /></p>

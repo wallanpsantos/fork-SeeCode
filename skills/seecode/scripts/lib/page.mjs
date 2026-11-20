@@ -100,7 +100,7 @@ export function buildPage({ spec, result, preset, typeName, settings = {} }) {
 ${webFonts ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link id="sc-fonts" rel="stylesheet" href="${esc(FONTS_HREF)}${sketchy ? '&amp;family=Kalam:wght@400;700' : ''}">` : ''}${(brandFonts.href || []).map((h) => `
 <link class="sc-brand-fonts" rel="stylesheet" href="${esc(h)}">`).join('')}${brandFonts.faces ? `
-<style id="sc-brand-faces">${brandFonts.faces}</style>` : ''}
+<style id="sc-brand-faces">${String(brandFonts.faces).replace(/<\/(style)/gi, '<\\/$1')}</style>` : ''}
 <style>${skinCss({ skin: spec.skin || settings.skin || 'light', brand })}
 :root{--sc-max:${SIZE_MAX[spec.size || 'auto'] || 1200}px}
 ${VIEWER_CSS}</style>

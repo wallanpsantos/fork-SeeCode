@@ -160,3 +160,37 @@ test('brand fonts lead the stacks and load in the page', async () => {
   assert.match(plain, /--sc-font-sans:'IBM Plex Sans'/);
   assert.doesNotMatch(plain, /<link class="sc-brand-fonts"/);
 });
+
+test('public URLs block redirects and stylesheet links to private/metadata hosts', async () => {
+  const realFetch = globalThis.fetch;
+  const requested = [];
+  globalThis.fetch = async (url) => {
+    requested.push(String(url));
+    if (String(url).startsWith('https://public.example/redirect-priv')) {
+      return new Response('', { status: 302, headers: { location: 'https://169.254.169.254/latest/meta-data/' } });
+    }
+    if (String(url).startsWith('https://public.example/redirect-http')) {
+      return new Response('', { status: 302, headers: { location: 'http://public.example/insecure' } });
+    }
+    if (String(url).startsWith('https://public.example/sheet')) {
+      return new Response('<style>body{background:#fff;color:#111}a{color:#2563eb}</style><link rel="stylesheet" href="http://127.0.0.1:9999/internal.css">', { status: 200 });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+  try {
+    const priv = await learnBrand('https://public.example/redirect-priv');
+    assert.equal(priv.ok, false);
+    assert.match(priv.error, /blocked private host/i);
+    assert.ok(!requested.some((u) => u.includes('169.254.169.254')));
+
+    const downgrade = await learnBrand('https://public.example/redirect-http');
+    assert.equal(downgrade.ok, false);
+    assert.match(downgrade.error, /blocked https-to-http redirect/i);
+
+    const sheet = await learnBrand('https://public.example/sheet');
+    assert.equal(sheet.ok, true);
+    assert.ok(!requested.some((u) => u.includes('127.0.0.1')));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
