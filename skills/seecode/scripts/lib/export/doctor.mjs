@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { launchBrowser, findChrome } from './chrome.mjs';
+import { ffmpegPath } from './bin.mjs';
 
 const VENDOR = fileURLToPath(new URL('../../vendor/', import.meta.url));
 const SKILL_MD = fileURLToPath(new URL('../../../SKILL.md', import.meta.url));
@@ -41,7 +42,9 @@ export async function doctor() {
     }
     await b.browser.close();
   }
-  const ffmpeg = !spawnSync('ffmpeg', ['-version']).error;
+  // caminho absoluto: nunca um ffmpeg.exe deixado na pasta atual
+  const ffmpegBin = ffmpegPath();
+  const ffmpeg = !!ffmpegBin && !spawnSync(ffmpegBin, ['-version']).error;
   const browserOk = !b.error;
   checks.static = browserOk ? 'ok (png, jpeg, webp, svg)' : 'png, jpeg, webp unavailable (svg works without a browser)';
   checks.gif = browserOk && vendored ? 'ok' : 'unavailable';

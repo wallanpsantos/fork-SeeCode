@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { status as configStatus } from '../config/config.mjs';
 import { launchBrowser } from './chrome.mjs';
+import { ffmpegPath } from './bin.mjs';
 import { exportSvg } from './svg.mjs';
 
 const VENDOR = fileURLToPath(new URL('../../vendor/', import.meta.url));
@@ -63,7 +64,9 @@ export async function exportDiagram(htmlPath, rawFlags = {}) {
   // format from the content (smallest text, diagram size, format budgets)
   const want = flags.scale || settings.scale;
   const scale = want && want !== 'auto' ? Number(want) : undefined;
-  const fps = Math.min(60, Number(flags.fps || settings.fps || 30));
+  // fps e duration podem vir do config do projeto: limites fixos evitam pedir
+  // milhares de capturas de tela
+  const fps = Math.max(1, Math.min(60, Number(flags.fps || settings.fps || 30) || 30));
   const theme = flags.theme || (settings.skin === 'dark' ? 'dark' : 'light');
   const crop = flags.crop || 'figure'; // figure (title + diagram) | diagram
   const stem = join(dirname(htmlPath), basename(htmlPath, extname(htmlPath)));
@@ -160,7 +163,7 @@ export async function exportDiagram(htmlPath, rawFlags = {}) {
           else finite = Math.max(finite, t.endTime || 0);
         }
         const auto = Math.max(finite, settle) + (loop ? Math.max(0, loop - Math.max(finite, settle)) : 0) + 900;
-        const total = durFlag && durFlag !== 'auto' ? Number(durFlag) * 1000 : Math.min(14000, auto || 1500);
+        const total = durFlag && durFlag !== 'auto' ? Math.max(500, Math.min(60000, Number(durFlag) * 1000 || 1500)) : Math.min(14000, auto || 1500);
         window.__scAnims = anims;
         return { total, count: anims.length };
       }, String(flags.duration || settings.duration || 'auto'));
@@ -315,12 +318,13 @@ async function encodeInPage({ fmt, fps, gifW }) {
 }
 
 function ffmpegEncode(framesB64, fps, out) {
-  const probe = spawnSync('ffmpeg', ['-version']);
-  if (probe.error) return { ok: false, error: 'ffmpeg not found (brew install ffmpeg)' };
+  // caminho absoluto: nunca um ffmpeg.exe deixado na pasta atual
+  const bin = ffmpegPath();
+  if (!bin || spawnSync(bin, ['-version']).error) return { ok: false, error: 'ffmpeg not found (install it, or set SEECODE_FFMPEG to its absolute path)' };
   const dir = mkdtempSync(join(tmpdir(), 'seecode-'));
   try {
     framesB64.forEach((b, i) => writeFileSync(join(dir, `f${String(i).padStart(5, '0')}.png`), Buffer.from(b, 'base64')));
-    const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', join(dir, 'f%05d.png'), '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out]);
+    const r = spawnSync(bin, ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', join(dir, 'f%05d.png'), '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out]);
     return r.status === 0 ? { ok: true } : { ok: false, error: String(r.stderr).slice(0, 200) };
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -2,43 +2,46 @@
 // Chrome/Chromium/Edge with --remote-debugging-pipe and speaks the DevTools
 // protocol over fds 3/4. Covers exactly what export needs: navigate, evaluate,
 // inject CSS, resize, element screenshots. Falls back to Playwright if present.
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir, platform } from 'node:os';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
+import { findExecutable } from './bin.mjs';
 
 // how long export waits for web fonts and other subresources before it
 // captures with fallback typography
 export const loadCap = () => Number(process.env.SEECODE_LOAD_TIMEOUT_MS) || 15000;
 
-const CANDIDATES = {
-  darwin: [
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-    '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-  ],
-  linux: ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge', 'brave-browser'],
-  win32: [
-    `${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`,
-    `${process.env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`,
-    `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
-    `${process.env['PROGRAMFILES(X86)']}\\Microsoft\\Edge\\Application\\msedge.exe`,
-  ],
-};
+const DARWIN = [
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+  '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+];
+const LINUX = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge', 'brave-browser'];
+const WIN32 = [
+  ['PROGRAMFILES', 'Google\\Chrome\\Application\\chrome.exe'],
+  ['PROGRAMFILES(X86)', 'Google\\Chrome\\Application\\chrome.exe'],
+  ['LOCALAPPDATA', 'Google\\Chrome\\Application\\chrome.exe'],
+  ['PROGRAMFILES(X86)', 'Microsoft\\Edge\\Application\\msedge.exe'],
+];
+
+// Caminhos absolutos a testar, em ordem. Uma variável de ambiente ausente
+// tiraria o prefixo ("undefined\Google\...") e viraria um caminho relativo à
+// pasta atual; por isso só entram candidatos absolutos.
+export function chromeCandidates(os = platform(), env = process.env) {
+  if (os === 'darwin') return DARWIN;
+  if (os === 'win32') {
+    return WIN32.filter(([v]) => env[v]).map(([v, rest]) => path.win32.join(env[v], rest)).filter((p) => path.win32.isAbsolute(p));
+  }
+  return LINUX.map((name) => findExecutable(name, { env, platform: os })).filter(Boolean);
+}
 
 export function findChrome() {
-  if (process.env.SEECODE_CHROME && existsSync(process.env.SEECODE_CHROME)) return process.env.SEECODE_CHROME;
-  for (const c of CANDIDATES[platform()] || []) {
-    if (c.includes('/') || c.includes('\\')) {
-      if (existsSync(c)) return c;
-    } else {
-      const r = spawnSync('which', [c], { encoding: 'utf8' });
-      if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
-    }
-  }
-  return null;
+  const own = process.env.SEECODE_CHROME;
+  if (own && path.isAbsolute(own) && existsSync(own)) return own;
+  return chromeCandidates().find((c) => existsSync(c)) || null;
 }
 
 const CDP_TIMEOUT = Number(process.env.SEECODE_CDP_TIMEOUT_MS) || 120000;
