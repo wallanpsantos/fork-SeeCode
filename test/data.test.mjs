@@ -94,3 +94,32 @@ test('the home folder and the global ~/.seecode config never widen the data root
     for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
 });
+
+test('an alias of the home folder (link or junction) does not widen the data root either', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'sc-fakehome-'));
+  mkdirSync(join(home, '.seecode'));
+  writeFileSync(join(home, '.seecode/config.json'), '{}');
+  mkdirSync(join(home, 'Documents'));
+  writeFileSync(join(home, 'Documents/finances.csv'), 'item,v\nsalary,1\n');
+  mkdirSync(join(home, 'downloads/specs'), { recursive: true });
+  const alias = join(mkdtempSync(join(tmpdir(), 'sc-alias-')), 'home-alias');
+  try {
+    symlinkSync(home, alias, 'junction');
+  } catch {
+    t.skip('this system cannot create links');
+    return;
+  }
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SEECODE_HOME: process.env.SEECODE_HOME };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.SEECODE_HOME;
+  try {
+    // a spec alcançada pelo apelido não enxerga a home como "projeto"
+    const at = join(alias, 'downloads/specs/chart.json');
+    const r = renderSpec({ type: 'bar', title: 'T', data: '../../Documents/finances.csv' }, { specPath: at });
+    assert.equal(r.ok, false);
+    assert.match(r.problems[0].msg, /fora do projeto/);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+});

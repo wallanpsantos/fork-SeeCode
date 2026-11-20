@@ -1,26 +1,48 @@
 // Resolve `"data": "file.csv"` style references so chart data never has to
 // pass through the model. Supports CSV/TSV (header row) and JSON arrays.
-import { readFileSync, realpathSync, existsSync } from 'node:fs';
-import { resolve, extname, relative, isAbsolute, sep, dirname, join } from 'node:path';
+import { readFileSync, realpathSync, existsSync, statSync } from 'node:fs';
+import { resolve, extname, relative, isAbsolute, sep, dirname, join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { globalDir } from './config/config.mjs';
 
 const DATA_EXT = new Set(['.csv', '.tsv', '.json']);
 
-const samePath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+// Caminho canônico (links resolvidos, caixa real do disco), mesmo para um
+// arquivo que ainda não existe: resolve o ancestral existente e anexa o resto.
+function canonical(p) {
+  let dir = resolve(p);
+  const rest = [];
+  while (!existsSync(dir) && dirname(dir) !== dir) { rest.unshift(basename(dir)); dir = dirname(dir); }
+  let real = dir;
+  try { real = realpathSync.native(dir); } catch { /* sem permissão: fica o caminho resolvido */ }
+  return join(real, ...rest);
+}
+
+// Identidade da pasta no disco (dev:ino): imune a apelidos por link,
+// junction ou diferença de maiúsculas, ao contrário de comparar texto.
+function identity(p) {
+  try {
+    const s = statSync(p, { bigint: true });
+    return `${s.dev}:${s.ino}`;
+  } catch {
+    return null;
+  }
+}
 
 // Raiz que limita os dados de uma spec: a pasta acima com .git, ou com um
 // .seecode/config.json que não seja o global (~/.seecode/config.json, que
 // faria da pasta pessoal inteira um "projeto"). A pasta pessoal e a raiz do
-// disco nunca contam; sem projeto, vale só a pasta da própria spec.
+// disco nunca contam; sem projeto, vale só a pasta da própria spec. A busca
+// anda pelo caminho canônico e reconhece home e config global pela identidade.
 export function dataRoot(baseDir) {
-  const start = resolve(baseDir);
-  const home = resolve(homedir());
-  const global = resolve(globalDir());
+  const start = canonical(baseDir);
+  const home = identity(homedir());
+  const global = identity(globalDir());
   for (let dir = start; ; dir = dirname(dir)) {
-    if (samePath(dir, home) || dirname(dir) === dir) return start;
+    if (dirname(dir) === dir || (home && identity(dir) === home)) return start;
     if (existsSync(join(dir, '.git'))) return dir;
-    if (!samePath(join(dir, '.seecode'), global) && existsSync(join(dir, '.seecode', 'config.json'))) return dir;
+    const sc = join(dir, '.seecode');
+    if (existsSync(join(sc, 'config.json')) && !(global && identity(sc) === global)) return dir;
   }
 }
 
@@ -43,13 +65,10 @@ export function dataPath(baseDir, file) {
   if (name.split(/[\\/]+/).some((s) => (s.startsWith('.') && s !== '.' && s !== '..') || s === 'node_modules')) {
     throw new Error(`arquivo de dados não pode estar em pasta ou arquivo oculto nem em node_modules: ${name}`);
   }
+  // os dois lados canônicos: links e apelidos de pasta resolvidos antes de comparar
   const root = dataRoot(baseDir);
   const target = resolve(baseDir, name);
-  let real = target;
-  try { real = realpathSync(target); } catch { /* inexistente: a leitura falha com a mensagem normal */ }
-  let realRoot = root;
-  try { realRoot = realpathSync(root); } catch { /* idem */ }
-  if (!isInside(root, target) || !isInside(realRoot, real)) throw new Error(`arquivo de dados fora do projeto da spec: ${name}`);
+  if (!isInside(root, canonical(target))) throw new Error(`arquivo de dados fora do projeto da spec: ${name}`);
   return target;
 }
 
