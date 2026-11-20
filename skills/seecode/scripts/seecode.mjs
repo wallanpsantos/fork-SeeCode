@@ -72,7 +72,11 @@ switch (cmd) {
     }
     let out;
     if (cmd === 'render') {
-      out = flags.out ? resolve(flags.out) : outPathFor(spec, specPath, settings);
+      try {
+        out = flags.out ? resolve(flags.out) : outPathFor(spec, specPath, settings);
+      } catch (e) {
+        fail(e.message, 'use a relative .html path next to the spec, e.g. "out": "diagram.html"');
+      }
       writeAtomic(out, r.html);
     }
     print(summarize(r, out));

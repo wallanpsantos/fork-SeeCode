@@ -14,6 +14,8 @@ on:
     inputs:
       bump:
         description: patch | minor | major
+        type: choice
+        options: [patch, minor, major]
         default: patch
 
 permissions:
@@ -28,30 +30,37 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      # este job faz push do commit de versão: mantém as credenciais do checkout
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: npm test
+      # valores de ${{ }} entram por env, nunca colados no script do shell
       - name: Bump version
         id: bump
+        env:
+          BUMP: ${{ github.event.inputs.bump || 'patch' }}
         run: |
-          node tools/bump-version.mjs "${{ github.event.inputs.bump || 'patch' }}"
+          node tools/bump-version.mjs "$BUMP"
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Commit and tag
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
         run: |
-          # authored as the maintainer, so the bot doesn't show up as a contributor
-          git config user.name "aryanutkarsh"
-          git config user.email "106980972+Aryanutkarsh@users.noreply.github.com"
-          git commit -am "chore(release): v${{ steps.bump.outputs.version }}"
-          git tag "v${{ steps.bump.outputs.version }}"
+          # o bot do Actions assina o commit: nem um mantenedor nem o dono do fork
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): v$VERSION"
+          git tag "v$VERSION"
           git push origin HEAD --tags
       - run: node tools/build-zip.mjs
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
         run: |
-          gh release create "v${{ steps.bump.outputs.version }}" dist/seecode.zip \
-            --title "SeeCode v${{ steps.bump.outputs.version }}" --generate-notes
+          gh release create "v$VERSION" dist/seecode.zip \
+            --title "SeeCode v$VERSION" --generate-notes

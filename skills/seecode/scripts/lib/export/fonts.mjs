@@ -18,13 +18,29 @@ export function googleFamilies(svg) {
 }
 
 const toData = async (src) => {
-  const r = await safeFetch(src, { httpsOnly: true });
+  // o limite vale durante o download, não depois de tudo em memória
+  const r = await safeFetch(src, { httpsOnly: true, maxBytes: MAX_FONT_BYTES }).catch((e) => {
+    throw new Error(/larger than/.test(e.message) ? 'font file too large to embed' : e.message);
+  });
   if (!r.ok) throw new Error(`HTTP ${r.status} for a font file`);
   const buf = Buffer.from(await r.arrayBuffer());
-  if (buf.length > MAX_FONT_BYTES) throw new Error('font file too large to embed');
   const type = /\.woff2(\?|$)/.test(src) ? 'woff2' : /\.woff(\?|$)/.test(src) ? 'woff' : /\.ttf(\?|$)/.test(src) ? 'truetype' : /\.otf(\?|$)/.test(src) ? 'opentype' : 'woff2';
   return `data:font/${type === 'truetype' ? 'ttf' : type === 'opentype' ? 'otf' : type};base64,${buf.toString('base64')}`;
 };
+
+// The @font-face rules Google Fonts returns for one family, subset to `text`,
+// with every file inlined as a data URL.
+async function familyFaces(fam, text) {
+  const url = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fam).replace(/%20/g, '+').replace(/%3A/gi, ':').replace(/%40/g, '@').replace(/%3B/gi, ';').replace(/%2C/gi, ',')}&text=${encodeURIComponent(text)}&display=swap`;
+  const res = await safeFetch(url, { httpsOnly: true, maxBytes: 1_000_000, headers: { 'user-agent': UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for Google Fonts CSS`);
+  const css = await res.text();
+  const blocks = (css.match(/@font-face\s*{[^}]*}/g) || []).filter((block) => /url\(([^)]+)\)/.test(block));
+  return Promise.all(blocks.map(async (block) => {
+    const src = /url\(([^)]+)\)/.exec(block)[1];
+    return block.replace(/src:[^;]+;/, `src:url(${await toData(src)}) format('woff2');`);
+  }));
+}
 
 export async function embedFonts(svg) {
   try {
@@ -33,22 +49,12 @@ export async function embedFonts(svg) {
     // uppercase variants too (labels use text-transform)
     for (const ch of [...chars]) chars.add(ch.toUpperCase());
     const text = [...chars].join('') + ' 0123456789';
-    const faces = [];
     // only families that lead a font stack are drawn; fallbacks replaced by a brand font are skipped
     const leads = new Set([...svg.matchAll(/--sc-font-(?:serif|sans|mono):\s*'([^']+)'/g)].map((m) => m[1].toLowerCase()));
     if (/Kalam/.test(svg)) leads.add('kalam');
     const used = googleFamilies(svg).filter((f) => !leads.size || leads.has(f.split(':')[0].replace(/\+/g, ' ').toLowerCase()));
-    for (const fam of used) {
-      const url = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fam).replace(/%20/g, '+').replace(/%3A/gi, ':').replace(/%40/g, '@').replace(/%3B/gi, ';').replace(/%2C/gi, ',')}&text=${encodeURIComponent(text)}&display=swap`;
-      const res = await safeFetch(url, { httpsOnly: true, headers: { 'user-agent': UA } });
-      if (!res.ok) throw new Error(`HTTP ${res.status} for Google Fonts CSS`);
-      const css = await res.text();
-      for (const block of css.match(/@font-face\s*{[^}]*}/g) || []) {
-        const src = (block.match(/url\(([^)]+)\)/) || [])[1];
-        if (!src) continue;
-        faces.push(block.replace(/src:[^;]+;/, `src:url(${await toData(src)}) format('woff2');`));
-      }
-    }
+    // famílias e arquivos buscados juntos; a ordem das regras é mantida
+    const faces = (await Promise.all(used.map((fam) => familyFaces(fam, text)))).flat();
     // nothing to fetch when the page was built with fonts: 'system'
     if (!faces.length && googleFamilies(svg).length) return { ok: false, svg, error: 'no font faces returned' };
     let out = svg.replace(/@import url\('https:\/\/fonts\.googleapis\.com\/[^']*'\);/g, '');

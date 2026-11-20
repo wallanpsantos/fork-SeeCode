@@ -3,7 +3,7 @@
 // the skill then asks the user once and calls init().
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, isAbsolute } from 'node:path';
 
 export const DEFAULTS = {
   skin: 'light',
@@ -39,7 +39,8 @@ export function projectRoot(start = process.cwd()) {
 
 function readJson(path) {
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    const v = JSON.parse(readFileSync(path, 'utf8'));
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
   } catch {
     return null;
   }
@@ -76,6 +77,16 @@ function cleanRoles(roles, label) {
   return clean;
 }
 
+// Toda url() de um @font-face precisa ser https. Escapes CSS (\75rl() e
+// URL( em maiúsculas também são url() para o navegador, então uma regra com
+// barra invertida é recusada e a busca ignora a caixa; uma url( sem fechar
+// também reprova.
+function httpsUrlsOnly(face) {
+  if (face.includes('\\')) return false;
+  const urls = [...face.matchAll(/url\(([^)]*)\)/gi)].map((m) => m[1].trim().replace(/^["']|["']$/g, ''));
+  return urls.length === (face.match(/url\(/gi) || []).length && urls.every((u) => u.startsWith('https://'));
+}
+
 // Fonts are stored as data, then sanitised: plain family names, Google Fonts
 // stylesheet URLs, and @font-face rules whose files are https URLs.
 export function cleanFonts(fonts) {
@@ -89,11 +100,36 @@ export function cleanFonts(fonts) {
   const href = [].concat(fonts.href || []).filter((h) => /^https:\/\/fonts\.googleapis\.com\/css2\?[\w+:;@.,&=%-]+$/.test(h)).slice(0, 4);
   if (href.length) out.href = href;
   const faces = (String(fonts.faces || '').match(/@font-face\s*\{[^{}<]*\}/g) || [])
-    .filter((f) => !/(<\/style|<script|javascript:|expression\(|@import)/i.test(f) && [...f.matchAll(/url\(\s*"?([^")]+)"?\s*\)/g)].every((m) => /^https:\/\//.test(m[1])))
+    .filter((f) => !/(<\/style|<script|javascript:|expression\(|@import)/i.test(f) && httpsUrlsOnly(f))
     .join('').slice(0, 20000);
   if (faces) out.faces = faces;
   return Object.keys(out).length ? out : null;
 }
+
+// Brand vindo de um config.json é dado, não código: o .seecode/config.json de
+// um repositório clonado foi escrito por outra pessoa e vai parar dentro de
+// <style>. Só ficam os papéis conhecidos com cor hex válida (como no
+// saveProfile) e fontes sanitizadas; o resto é descartado.
+export function cleanBrand(brand) {
+  if (!brand || typeof brand !== 'object') return null;
+  const roles = (src) => {
+    const out = {};
+    if (src && typeof src === 'object') for (const k of BRAND_KEYS) if (typeof src[k] === 'string' && HEX.test(src[k])) out[k] = src[k];
+    return out;
+  };
+  const out = roles(brand);
+  for (const mode of ['light', 'dark']) {
+    const m = roles(brand[mode]);
+    if (Object.keys(m).length) out[mode] = m;
+  }
+  const fonts = cleanFonts(brand.fonts);
+  if (fonts) out.fonts = fonts;
+  return Object.keys(out).length ? out : null;
+}
+
+// outputDir de um config de projeto: relativo e sem subir de pasta, para um
+// repositório clonado não mandar o import gravar em outro lugar do disco.
+const isProjectRelative = (v) => typeof v === 'string' && v.trim() !== '' && !isAbsolute(v) && !/^([a-zA-Z]:|[\\/])/.test(v) && !v.split(/[\\/]+/).includes('..');
 
 export function saveProfile(slug, brand, { dark, source, fonts } = {}) {
   if (!PROFILE_SLUG.test(slug)) throw new Error('profile slug must be lowercase letters, digits, dashes');
@@ -125,11 +161,31 @@ export function status(cwd) {
   const proj = readJson(p.project);
   let state = 'first-run';
   if (proj) state = proj.inherit === 'global' ? 'inherits-global' : 'project';
-  const settings = { ...DEFAULTS, ...(g || {}), ...(proj && proj.inherit !== 'global' ? proj : {}) };
+  const own = proj && proj.inherit !== 'global' ? proj : null;
+  const settings = { ...DEFAULTS, ...g, ...own };
   delete settings.inherit;
-  const profile = loadProfile(settings.profile);
-  if (profile) settings.brand = { ...(profile.brand || {}), ...(profile.dark ? { dark: profile.dark } : {}), ...(profile.fonts ? { fonts: cleanFonts(profile.fonts) } : {}), ...(settings.brand || {}) };
+  settings.outputDir = safeOutputDir(own, g, settings.outputDir);
+  const brand = cleanBrand(mergedBrand(loadProfile(settings.profile), settings.brand));
+  if (brand) settings.brand = brand;
+  else delete settings.brand;
   return { state, root: p.root, hasGlobal: !!g, settings };
+}
+
+// O outputDir de um projeto só vale se for relativo e sem "..". O valor
+// global (escolhido pelo próprio usuário) continua valendo quando o init o
+// copiou para o projeto.
+function safeOutputDir(own, global, current) {
+  const dir = own?.outputDir;
+  if (dir === undefined || dir === global?.outputDir || isProjectRelative(dir)) return current;
+  return global?.outputDir ?? DEFAULTS.outputDir;
+}
+
+// Perfil salvo + brand dos configs; o resultado ainda passa por cleanBrand.
+function mergedBrand(profile, fromConfig) {
+  const merged = {};
+  if (profile) Object.assign(merged, profile.brand, profile.dark && { dark: profile.dark }, profile.fonts && { fonts: profile.fonts });
+  if (fromConfig && typeof fromConfig === 'object') Object.assign(merged, fromConfig);
+  return merged;
 }
 
 export function init(cwd, use) {

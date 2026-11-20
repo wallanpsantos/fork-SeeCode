@@ -7,6 +7,10 @@ import { clean, safeId, gridFromPositions } from './common.mjs';
 // Generous ceilings: real boards are far smaller; a file past these is
 // malformed or hostile, and parsing it would only burn memory.
 export const MAX_CELLS = 20000;
+// teto da descompressão: um diagrama comprimido de poucos KB pode inflar para
+// GBs (zip bomb) e derrubar o processo antes de qualquer outro limite
+export const MAX_XML_BYTES = 32 * 1024 * 1024;
+const INFLATE = { maxOutputLength: MAX_XML_BYTES };
 const num = (v) => { const n = Number(v || 0); return Number.isFinite(n) && Math.abs(n) < 1e7 ? n : NaN; };
 
 function xmlAttrs(tag) {
@@ -19,7 +23,7 @@ function decodeDiagram(inner) {
   const t = inner.trim();
   if (t.startsWith('<')) return t;
   try {
-    const raw = inflateRawSync(Buffer.from(t, 'base64')).toString('utf8');
+    const raw = inflateRawSync(Buffer.from(t, 'base64'), INFLATE).toString('utf8');
     return decodeURIComponent(raw);
   } catch {
     return '';
@@ -38,8 +42,9 @@ export function extractDrawioXml(buf, name) {
         const nul = data.indexOf(0);
         const key = data.toString('latin1', 0, nul);
         if (key === 'mxfile' || key === 'mxGraphModel') {
-          let val = type === 'zTXt' ? inflateSync(data.subarray(nul + 2)).toString('utf8') : data.toString('utf8', type === 'iTXt' ? data.indexOf(0, nul + 3) + 1 : nul + 1);
-          return decodeURIComponent(val);
+          if (type === 'zTXt') return decodeURIComponent(inflateSync(data.subarray(nul + 2), INFLATE).toString('utf8'));
+          const from = type === 'iTXt' ? data.indexOf(0, nul + 3) + 1 : nul + 1;
+          return decodeURIComponent(data.toString('utf8', from));
         }
       }
       p += 12 + len;

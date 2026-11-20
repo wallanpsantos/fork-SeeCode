@@ -11,6 +11,16 @@ import { MOTION_CSS, motionVars } from './motion.mjs';
 import { VIEWER_CSS } from './viewer/viewer.css.mjs';
 
 const CLIENT = readFileSync(fileURLToPath(new URL('./viewer/viewer.client.js', import.meta.url)), 'utf8');
+
+// Encoders que o menu Export carrega do jsDelivr (LIBS em viewer.client.js).
+// O import map fixa o hash de cada arquivo (SRI): se o CDN servir outro
+// conteúdo, o navegador recusa o módulo. Hashes tirados dos tarballs do npm
+// e conferidos contra o jsDelivr; ao trocar uma versão, recalcule aqui.
+export const ENCODER_INTEGRITY = {
+  'https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js': 'sha384-P7/5O5/b1yQQnqgcqktjBKyP5irxx5L0p6ft3eD1i3ASjVm03RkbLOmZkKr6qFHb',
+  'https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.mjs': 'sha384-facaCk61vrPnP06GugWzp+qxQd54szc/tY0CmOuHnyVlgJbZsvP03XsJ4UjHQtGk',
+  'https://cdn.jsdelivr.net/npm/webm-muxer@5.1.4/build/webm-muxer.mjs': 'sha384-Bx70kFKIlj0LNMWhU+2s9vNoWzXs0HVWQebO2jL4Zpav+lJCob6/Tdmy/XupEQEd',
+};
 const SIZE_MAX = { auto: 1200, wide: 1400, slide: 1280, square: 900 };
 
 // Keeps letters and digits in any script, so a Chinese or Arabic title
@@ -18,6 +28,17 @@ const SIZE_MAX = { auto: 1200, wide: 1400, slide: 1280, square: 900 };
 export function slugify(s) {
   const slug = [...String(s || 'diagram').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, '-').replace(/^-|-$/g, '')].slice(0, 48).join('').replace(/-$/, '');
   return slug || 'diagram';
+}
+
+// Fontes de cada nó, agrupadas pelo id. Objeto sem protótipo: um id
+// "__proto__" ou "constructor" é só mais uma chave.
+function evidenceById(list = []) {
+  const out = Object.create(null);
+  for (const e of list) {
+    if (!out[e.id]) out[e.id] = [];
+    out[e.id].push({ file: e.file, line: e.line, note: e.note });
+  }
+  return out;
 }
 
 // Right-to-left scripts flip the page chrome; the diagram keeps its geometry.
@@ -100,17 +121,18 @@ export function buildPage({ spec, result, preset, typeName, settings = {} }) {
 ${webFonts ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link id="sc-fonts" rel="stylesheet" href="${esc(FONTS_HREF)}${sketchy ? '&amp;family=Kalam:wght@400;700' : ''}">` : ''}${(brandFonts.href || []).map((h) => `
 <link class="sc-brand-fonts" rel="stylesheet" href="${esc(h)}">`).join('')}${brandFonts.faces ? `
-<style id="sc-brand-faces">${String(brandFonts.faces).replace(/<\/(style)/gi, '<\\/$1')}</style>` : ''}
+<style id="sc-brand-faces">${String(brandFonts.faces).replace(/<\/(style)/gi, String.raw`<\/$1`)}</style>` : ''}
 <style>${skinCss({ skin: spec.skin || settings.skin || 'light', brand })}
 :root{--sc-max:${SIZE_MAX[spec.size || 'auto'] || 1200}px}
 ${VIEWER_CSS}</style>
 <style id="sc-diagram-css">${DIAGRAM_CSS}${MOTION_CSS}</style>
+<script type="importmap">${JSON.stringify({ integrity: ENCODER_INTEGRITY })}</script>
 <script type="text/plain" id="sc-token-names">${tokenNames}</script>
 <script type="application/json" id="sc-meta">${JSON.stringify({
     type: typeName,
     groups: Object.fromEntries((result.graph?.nodes || []).filter((n) => n.group).map((n) => [n.id, n.group])),
     labels: legendLabels(spec),
-    evidence: (spec.evidence || []).reduce((m, e) => ((m[e.id] = m[e.id] || []).push({ file: e.file, line: e.line, note: e.note }), m), {}),
+    evidence: evidenceById(spec.evidence),
   }).replace(/</g, '\\u003c')}</script>
 </head>
 <body>

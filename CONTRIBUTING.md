@@ -20,7 +20,7 @@ cd seecode
 npm test
 ```
 
-The export tests drive a Chrome-family browser (Chrome, Edge, Chromium or Brave). Without one they're skipped, not failed. Set `SEECODE_CHROME=/path/to/browser` if yours is somewhere unusual.
+The export tests drive a Chrome-family browser (Chrome, Edge, Chromium or Brave). Without one they're skipped, not failed. Set `SEECODE_CHROME=/path/to/browser` (an absolute path) if yours is somewhere unusual.
 
 To try your working copy in Claude Code, link the skill:
 
