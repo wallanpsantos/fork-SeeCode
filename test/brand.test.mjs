@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { learnBrand } from '../skills/seecode/scripts/lib/brand/brand.mjs';
 import { contrast, luminance } from '../skills/seecode/scripts/lib/color.mjs';
 import { skinCss } from '../skills/seecode/scripts/lib/tokens.mjs';
+import { isBlockedAddress } from '../skills/seecode/scripts/lib/net.mjs';
 
 const SITE = fileURLToPath(new URL('./brand-fixtures/site/', import.meta.url));
 // stand-in for the Google Fonts lookup, so tests never leave the machine
@@ -161,36 +162,60 @@ test('brand fonts lead the stacks and load in the page', async () => {
   assert.doesNotMatch(plain, /<link class="sc-brand-fonts"/);
 });
 
-test('public URLs block redirects and stylesheet links to private/metadata hosts', async () => {
-  const realFetch = globalThis.fetch;
-  const requested = [];
-  globalThis.fetch = async (url) => {
-    requested.push(String(url));
-    if (String(url).startsWith('https://public.example/redirect-priv')) {
-      return new Response('', { status: 302, headers: { location: 'https://169.254.169.254/latest/meta-data/' } });
+test('a public site cannot steer brand onboarding into the private network', async () => {
+  const hits = [];
+  const server = createServer((req, res) => {
+    hits.push(req.url);
+    const port = req.socket.localPort;
+    if (req.url === '/redirect-priv') return res.writeHead(302, { location: `http://[::ffff:169.254.169.254]:${port}/latest/meta-data/` }).end();
+    if (req.url === '/sheet') {
+      return res.end(`<style>body{background:#fff;color:#111}a{color:#2563eb}</style>
+        <link rel="stylesheet" href="http://[::ffff:127.0.0.1]:${port}/mapped.css">
+        <link rel="stylesheet" href="http://localhost:${port}/local.css">
+        <link rel="stylesheet" href="http://inside.test:${port}/dns.css">
+        <link rel="stylesheet" href="/ok.css">`);
     }
-    if (String(url).startsWith('https://public.example/redirect-http')) {
-      return new Response('', { status: 302, headers: { location: 'http://public.example/insecure' } });
-    }
-    if (String(url).startsWith('https://public.example/sheet')) {
-      return new Response('<style>body{background:#fff;color:#111}a{color:#2563eb}</style><link rel="stylesheet" href="http://127.0.0.1:9999/internal.css">', { status: 200 });
-    }
-    throw new Error(`unexpected fetch: ${url}`);
+    if (req.url === '/ok.css') return res.end('.btn{background:#e4572e}');
+    return res.writeHead(404).end();
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  // public.test é o "site público" (o servidor local); inside.test resolve para a rede interna
+  const net = {
+    lookup: (host, o, cb) => cb(null, [{ address: host === 'public.test' ? '127.0.0.1' : '10.0.0.7', family: 4 }]),
+    isBlocked: (ip) => ip !== '127.0.0.1' && isBlockedAddress(ip),
   };
   try {
-    const priv = await learnBrand('https://public.example/redirect-priv');
+    const priv = await learnBrand(`http://public.test:${port}/redirect-priv`, { net });
     assert.equal(priv.ok, false);
     assert.match(priv.error, /blocked private host/i);
-    assert.ok(!requested.some((u) => u.includes('169.254.169.254')));
 
-    const downgrade = await learnBrand('https://public.example/redirect-http');
-    assert.equal(downgrade.ok, false);
-    assert.match(downgrade.error, /blocked https-to-http redirect/i);
-
-    const sheet = await learnBrand('https://public.example/sheet');
-    assert.equal(sheet.ok, true);
-    assert.ok(!requested.some((u) => u.includes('127.0.0.1')));
+    const sheet = await learnBrand(`http://public.test:${port}/sheet`, { net });
+    assert.equal(sheet.ok, true, JSON.stringify(sheet));
+    assert.equal(sheet.light.accent, '#e4572e');
+    assert.deepEqual(hits.filter((h) => /\.css|meta-data/.test(h)), ['/ok.css']);
   } finally {
-    globalThis.fetch = realFetch;
+    server.close();
   }
+});
+
+test('hostile pages and stylesheets are scanned in linear time', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sc-redos-'));
+  const { writeFileSync } = await import('node:fs');
+  const big = 390_000; // fromPath lê arquivos de até 400 KB
+  writeFileSync(join(dir, 'a.css'), 'a'.repeat(big)); // sem chaves
+  writeFileSync(join(dir, 'b.css'), '/*'.repeat(big / 2)); // comentários sem fim
+  writeFileSync(join(dir, 'c.css'), `x{color:${'rgb('.repeat(big / 4)}}`); // cores sem fechar
+  writeFileSync(join(dir, 'd.html'), '<style'.repeat(big / 6)); // tags sem fechar
+  writeFileSync(join(dir, 'e.css'), `body{background:#fff;color:#111}${'{'.repeat(big / 2)}`);
+  const t = Date.now();
+  await learnBrand(dir, { checkGoogle });
+  assert.ok(Date.now() - t < 5000, `scan took ${Date.now() - t} ms`);
+});
+
+test('the linear CSS scanner reads rules like the old regex', async () => {
+  const { cssRules, tagBlocks, stripCssComments } = await import('../skills/seecode/scripts/lib/brand/brand.mjs');
+  assert.deepEqual(cssRules('a{b}@media x{c{d}}e{}{f}'), [['a', 'b'], ['c', 'd'], ['e', '']]);
+  assert.deepEqual(tagBlocks('<STYLE media=x>a{}</style><stylesheet>no</stylesheet><style>b{}</STYLE>', 'style'), ['a{}', 'b{}']);
+  assert.equal(stripCssComments('a/* x */b/* open'), 'ab');
 });

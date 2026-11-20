@@ -18,10 +18,12 @@ export function googleFamilies(svg) {
 }
 
 const toData = async (src) => {
-  const r = await safeFetch(src, { httpsOnly: true });
+  // o limite vale durante o download, não depois de tudo em memória
+  const r = await safeFetch(src, { httpsOnly: true, maxBytes: MAX_FONT_BYTES }).catch((e) => {
+    throw new Error(/larger than/.test(e.message) ? 'font file too large to embed' : e.message);
+  });
   if (!r.ok) throw new Error(`HTTP ${r.status} for a font file`);
   const buf = Buffer.from(await r.arrayBuffer());
-  if (buf.length > MAX_FONT_BYTES) throw new Error('font file too large to embed');
   const type = /\.woff2(\?|$)/.test(src) ? 'woff2' : /\.woff(\?|$)/.test(src) ? 'woff' : /\.ttf(\?|$)/.test(src) ? 'truetype' : /\.otf(\?|$)/.test(src) ? 'opentype' : 'woff2';
   return `data:font/${type === 'truetype' ? 'ttf' : type === 'opentype' ? 'otf' : type};base64,${buf.toString('base64')}`;
 };
@@ -40,7 +42,7 @@ export async function embedFonts(svg) {
     const used = googleFamilies(svg).filter((f) => !leads.size || leads.has(f.split(':')[0].replace(/\+/g, ' ').toLowerCase()));
     for (const fam of used) {
       const url = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fam).replace(/%20/g, '+').replace(/%3A/gi, ':').replace(/%40/g, '@').replace(/%3B/gi, ';').replace(/%2C/gi, ',')}&text=${encodeURIComponent(text)}&display=swap`;
-      const res = await safeFetch(url, { httpsOnly: true, headers: { 'user-agent': UA } });
+      const res = await safeFetch(url, { httpsOnly: true, maxBytes: 1_000_000, headers: { 'user-agent': UA } });
       if (!res.ok) throw new Error(`HTTP ${res.status} for Google Fonts CSS`);
       const css = await res.text();
       for (const block of css.match(/@font-face\s*{[^}]*}/g) || []) {

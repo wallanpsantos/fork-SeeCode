@@ -7,44 +7,125 @@ import { join, extname, basename, relative } from 'node:path';
 import { parse, norm, toHsl, luminance, contrast, isDark, mix, ensureContrast, TARGETS } from '../color.mjs';
 import { isPrivateHost, safeFetch } from '../net.mjs';
 
-const COLOR_RE = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g;
+// Quantificadores limitados: o texto vem de sites e projetos de terceiros, e
+// `[^)]*` sem teto vira busca quadrática em 2 MB hostis.
+const COLOR_RE = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]{0,80}\)|hsla?\([^)]{0,80}\)/g;
+const VAR_RE = /var\((--[\w-]{1,64})[^)]{0,200}\)/g;
 const DEFAULT = { lightPaper: '#f6f5f1', lightInk: '#1d2433', darkPaper: '#1a1a1a', darkInk: '#e8e6e3', link: '#0f7f81', darkLink: '#3cc6c4' };
 const MAX_BYTES = 2_000_000;
 const FETCH_MS = 10_000;
+const MAX_TAG = 4096; // uma tag <link>/<meta> real é curta
+const MAX_VALUE = 2000; // declarações maiores (data: URIs) não trazem cor nem fonte
+
+// ---- linear scanners -------------------------------------------------------
+// Varreduras com indexOf em vez de regex com backtracking: com 2 MB hostis,
+// `<style[^>]*>([\s\S]*?)<\/style>` e `([^{}]+)\{([^{}]*)\}` levariam minutos.
+
+// minúsculas só em ASCII, para os índices continuarem os mesmos do original
+const asciiLower = (s) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+const tagEnd = (lower, at, name) => /[\s/>]/.test(lower[at + name.length + 1] || '');
+
+// conteúdo de cada <name …>…</name>
+export function tagBlocks(html, name) {
+  const lower = asciiLower(html);
+  const out = [];
+  for (let at = 0; ;) {
+    const open = lower.indexOf(`<${name}`, at);
+    if (open < 0) break;
+    if (!tagEnd(lower, open, name)) { at = open + 1; continue; }
+    const gt = lower.indexOf('>', open);
+    if (gt < 0) break;
+    const close = lower.indexOf(`</${name}`, gt);
+    if (close < 0) break;
+    out.push(html.slice(gt + 1, close));
+    at = close + name.length + 2;
+  }
+  return out;
+}
+
+// cada tag <name …> inteira (até MAX_TAG caracteres)
+export function tagsNamed(html, name) {
+  const lower = asciiLower(html);
+  const out = [];
+  for (let at = 0; ;) {
+    const open = lower.indexOf(`<${name}`, at);
+    if (open < 0) break;
+    const gt = lower.indexOf('>', open);
+    if (gt < 0) break;
+    if (tagEnd(lower, open, name) && gt - open <= MAX_TAG) out.push(html.slice(open, gt + 1));
+    at = gt + 1;
+  }
+  return out;
+}
+
+const attr = (tag, name) => (new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`, 'i').exec(tag) || [])[1];
+
+export function stripCssComments(css) {
+  let out = '';
+  for (let at = 0; ;) {
+    const s = css.indexOf('/*', at);
+    if (s < 0) return out + css.slice(at);
+    out += css.slice(at, s);
+    const e = css.indexOf('*/', s + 2);
+    if (e < 0) return out; // comentário sem fim vai até o fim, como no CSS
+    at = e + 2;
+  }
+}
+
+// [seletor, corpo] de cada `seletor{corpo}` sem chaves dentro, como fazia
+// /([^{}]+)\{([^{}]*)\}/g, numa única passada
+export function cssRules(css) {
+  const out = [];
+  let last = -1; // posição da chave anterior
+  let open = -1; // '{' candidata a abrir uma regra
+  let from = 0; // início do seletor dessa candidata
+  for (let i = 0; i < css.length; i++) {
+    const c = css[i];
+    if (c !== '{' && c !== '}') continue;
+    if (c === '}' && open >= 0) out.push([css.slice(from, open), css.slice(open + 1, i)]);
+    if (c === '{' && i > last + 1) { open = i; from = last + 1; } else open = -1;
+    last = i;
+  }
+  return out;
+}
 
 // ---- collecting sources ----------------------------------------------------
 
-async function get(url, { allowPrivate = false } = {}) {
+async function get(url, { allowPrivate = false, net = {} } = {}) {
   const r = await safeFetch(url, {
     allowPrivate,
     timeoutMs: FETCH_MS,
+    maxBytes: MAX_BYTES,
+    overflow: 'truncate', // de uma página enorme basta o começo
     headers: { 'user-agent': 'Mozilla/5.0 (SeeCode brand onboarding)', accept: 'text/html,text/css,*/*' },
+    ...net,
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const text = await r.text();
   return text.slice(0, MAX_BYTES);
 }
 
-async function fromUrl(url) {
+async function fromUrl(url, net) {
   const allowPrivate = isPrivateHost(new URL(url).hostname);
-  const html = await get(url, { allowPrivate });
+  const html = await get(url, { allowPrivate, net });
   const docs = [{ from: url, kind: 'html', text: html }];
-  for (const m of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) docs.push({ from: `${url} <style>`, kind: 'css', text: m[1] });
-  const theme = /<meta[^>]+name=["']theme-color["'][^>]*content=["']([^"']+)["']/i.exec(html) || /<meta[^>]+content=["']([^"']+)["'][^>]*name=["']theme-color["']/i.exec(html);
-  const sheets = [...html.matchAll(/<link\b[^>]*>/gi)]
-    .map((m) => m[0])
-    .filter((tag) => /rel=["'][^"']*stylesheet/i.test(tag))
-    .map((tag) => (/href=["']([^"']+)["']/i.exec(tag) || [])[1])
+  for (const css of tagBlocks(html, 'style')) docs.push({ from: `${url} <style>`, kind: 'css', text: css });
+  const meta = tagsNamed(html, 'meta').find((t) => /^theme-color$/i.test(attr(t, 'name') || ''));
+  const theme = meta && attr(meta, 'content');
+  const sheets = tagsNamed(html, 'link')
+    .filter((tag) => /stylesheet/i.test(attr(tag, 'rel') || ''))
+    .map((tag) => attr(tag, 'href'))
     .filter(Boolean)
     .filter((h) => !/fonts\.googleapis|use\.typekit|fontawesome/i.test(h))
     .slice(0, 6);
   for (const href of sheets) {
-    const abs = new URL(href.replace(/&amp;/g, '&'), url);
+    let abs;
+    try { abs = new URL(href.replace(/&amp;/g, '&'), url); } catch { continue; }
     if (!/^https?:$/.test(abs.protocol)) continue;
     if (!allowPrivate && isPrivateHost(abs.hostname)) continue;
-    try { docs.push({ from: abs.href, kind: 'css', text: await get(abs.href, { allowPrivate }) }); } catch { /* unreachable sheet: skip */ }
+    try { docs.push({ from: abs.href, kind: 'css', text: await get(abs.href, { allowPrivate, net }) }); } catch { /* unreachable or blocked sheet: skip */ }
   }
-  return { docs, themeColor: theme && norm(theme[1]) };
+  return { docs, themeColor: theme && norm(theme) };
 }
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage', 'vendor', '.seecode', 'diagrams']);
@@ -78,10 +159,10 @@ function scan(docs) {
   const count = (c) => freq.set(c, (freq.get(c) || 0) + 1);
   for (const d of docs) {
     let css = d.text;
-    if (d.kind === 'html') css = [...d.text.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
+    if (d.kind === 'html') css = tagBlocks(d.text, 'style').join('\n');
     if (d.kind === 'tokens') {
       // tailwind / theme files: `primary: '#…'`, `"brand-500": "#…"`, nested keys flattened by name
-      for (const m of d.text.matchAll(/["']?([A-Za-z][\w-]*)["']?\s*:\s*["'](#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\))["']/g)) {
+      for (const m of d.text.matchAll(/["']?([A-Za-z][\w-]{0,63})["']?\s{0,16}:\s{0,16}["'](#[0-9a-fA-F]{3,8}|rgba?\([^)]{0,80}\)|hsla?\([^)]{0,80}\))["']/g)) {
         const c = norm(m[2]);
         if (!c) continue;
         props.set(`--${m[1].toLowerCase()}`, { value: c, from: d.from });
@@ -89,19 +170,21 @@ function scan(docs) {
       }
       continue;
     }
-    css = css.replace(/\/\*[\s\S]*?\*\//g, '');
-    for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const sel = rule[1].trim().replace(/\s+/g, ' ');
+    css = stripCssComments(css);
+    for (const [rawSel, body] of cssRules(css)) {
+      if (rawSel.length > MAX_TAG) continue; // seletor gigante: não é html/body/botão
+      const sel = rawSel.trim().replace(/\s+/g, ' ');
       if (/@font-face$/i.test(sel)) {
-        const fam = /font-family\s*:\s*([^;]+)/i.exec(rule[2]);
-        if (fam) faces.push({ family: unquote(fam[1]), css: `@font-face{${rule[2].trim()}}`, base: d.from });
+        const fam = body.length <= MAX_TAG && /font-family\s*:\s*([^;]{1,200})/i.exec(body);
+        if (fam) faces.push({ family: unquote(fam[1]), css: `@font-face{${body.trim()}}`, base: d.from });
         continue;
       }
-      for (const decl of rule[2].split(';')) {
+      for (const decl of body.split(';')) {
         const i = decl.indexOf(':');
         if (i < 0) continue;
         const prop = decl.slice(0, i).trim().toLowerCase();
         const value = decl.slice(i + 1).trim();
+        if (value.length > MAX_VALUE || prop.length > 100) continue;
         if (prop.startsWith('--font')) fontProps.set(prop, value);
         if (prop.startsWith('--')) {
           const c = norm(value) || norm((value.match(COLOR_RE) || [])[0]);
@@ -115,7 +198,7 @@ function scan(docs) {
         }
         if (prop === 'font-family' || prop === 'font') fonts.push({ sel, value: prop === 'font' ? value.replace(/^.*?\d[\w.%]*(?:\/[\w.%]+)?\s+/, '') : value, from: d.from });
         if (!/color|background|fill|stroke|border/.test(prop)) continue;
-        const v = value.replace(/var\((--[\w-]+)[^)]*\)/g, (_, n) => (props.get(n.toLowerCase()) || {}).value || '');
+        const v = value.replace(VAR_RE, (_, n) => (props.get(n.toLowerCase()) || {}).value || '');
         for (const raw of v.match(COLOR_RE) || []) {
           const p = parse(raw);
           if (!p || p.a < 0.6) continue;
@@ -189,10 +272,10 @@ const SYSTEM = /^(segoe ui|helvetica neue|helvetica|arial|georgia|times new roma
 // generated names (`__Inter_d65c78`) back to the family they wrap.
 function familyOf(stack, fontProps, depth = 0) {
   if (!stack) return null;
-  const v = String(stack).replace(/var\((--[\w-]+)[^)]*\)/g, (_, n) => (depth < 3 && fontProps.get(n.toLowerCase())) || '');
+  const v = String(stack).slice(0, MAX_VALUE).replace(VAR_RE, (_, n) => (depth < 3 && fontProps.get(n.toLowerCase())) || '');
   for (const part of v.split(',')) {
     let f = unquote(part);
-    if (!f || /var\(/.test(f)) continue;
+    if (!f || f.length > 200 || /var\(/.test(f)) continue;
     const nx = /^__([A-Za-z0-9]+(?:_[A-Za-z][a-z]+)*?)_(?:Fallback_)?[0-9a-f]{5,}$/.exec(f);
     if (nx) { if (/Fallback/.test(f)) continue; f = nx[1].replace(/_/g, ' '); }
     if (GENERIC.test(f)) continue;
@@ -286,6 +369,7 @@ function build(found) {
 
 // ---- entry point -----------------------------------------------------------
 
+// opts.net: { lookup, isBlocked } repassados ao safeFetch (só para testes).
 // opts.fonts: "Family" (sans) or "sans=Family,serif=Family,mono=Family" to name
 // typefaces directly; opts.checkGoogle replaces the Google Fonts lookup (tests).
 export async function learnBrand(source, opts = {}) {
@@ -304,7 +388,7 @@ export async function learnBrand(source, opts = {}) {
     if (!source) return { ok: false, error: 'nothing to learn from', fix: 'pass a URL, a folder or file with CSS/theme tokens, or --colors "#hex,#hex,…"' };
     let collected;
     if (/^https?:\/\//i.test(source)) {
-      try { collected = await fromUrl(source); } catch (e) { return { ok: false, error: `could not fetch ${source}: ${e.message}`, fix: 'check the URL, or pass the brand colours with --colors' }; }
+      try { collected = await fromUrl(source, opts.net); } catch (e) { return { ok: false, error: `could not fetch ${source}: ${e.message}`, fix: 'check the URL, or pass the brand colours with --colors' }; }
     } else if (existsSync(source)) {
       collected = fromPath(source);
     } else {
