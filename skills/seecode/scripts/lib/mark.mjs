@@ -39,7 +39,10 @@ export function watermarkSvg([vx, vy, vw, vh], slug) {
   const y = vy + vh - 8 - H;
   const wx = SYMBOL_W + GAP, wy = (H - WORD_H) / 2 + 0.6;
   const id = `${slug}-mark`;
-  const img = (href, ax, ay, w, h) => `<image href="${href}" xlink:href="${href}" x="${ax}" y="${ay}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" preserveAspectRatio="none"/>`;
+  // Só xlink:href (SVG 1.1): vale em todo navegador e nos leitores antigos de
+  // SVG (Office, librsvg). Repetir a imagem em href também dobrava ~33 KB de
+  // base64 em cada página e em cada SVG exportado.
+  const img = (href, ax, ay, w, h) => `<image xlink:href="${href}" x="${ax}" y="${ay}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" preserveAspectRatio="none"/>`;
   return `<g class="sc-mark" aria-hidden="true" transform="translate(${x.toFixed(2)} ${y.toFixed(2)})">`
     + `<mask id="${id}" maskUnits="userSpaceOnUse" x="${wx.toFixed(2)}" y="${wy.toFixed(2)}" width="${WORD_W.toFixed(2)}" height="${WORD_H.toFixed(2)}">${img(word, wx.toFixed(2), wy.toFixed(2), WORD_W, WORD_H)}</mask>`
     + img(symbol, 0, 0, SYMBOL_W, H)

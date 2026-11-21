@@ -79,6 +79,9 @@ export function scanRepo(root, { depth = 2 } = {}) {
   const entrypoints = [];
   const tech = new Map();
   const relSet = new Set(rels.map((r) => r.split(sep).join('/')));
+  // módulos de todos os arquivos, calculados uma vez: refazer esta lista a
+  // cada import Python tornava o scan quadrático (2.000 arquivos: 11 s)
+  const moduleNames = new Set(rels.map((r) => moduleOf(r, depth)));
   let goModule = null;
 
   for (let i = 0; i < files.length; i++) {
@@ -159,7 +162,7 @@ export function scanRepo(root, { depth = 2 } = {}) {
         const p = (m[1] || m[2]).split('.');
         for (let k = Math.min(p.length, depth); k >= 1; k--) {
           const cand = p.slice(0, k).join('/');
-          if ([...modules.keys(), ...rels.map((r) => moduleOf(r, depth))].includes(cand) && cand !== mod) {
+          if (moduleNames.has(cand) && cand !== mod) {
             M.imports.set(cand, (M.imports.get(cand) || 0) + 1);
             break;
           }
