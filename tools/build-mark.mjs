@@ -8,7 +8,6 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchBrowser } from '../skills/seecode/scripts/lib/export/chrome.mjs';
-import { optimizePng } from './png-optimize.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const OUT = join(ROOT, 'skills/seecode/assets');
@@ -55,9 +54,7 @@ try {
       return { b64: btoa(s), w: W, h: height };
     }, { b64, height: job.height, white: job.white });
     writeFileSync(join(OUT, job.out), Buffer.from(result.b64, 'base64'));
-    // a marca vai em base64 em toda página e todo SVG: recomprime sem perda
-    const { before, after } = optimizePng(join(OUT, job.out));
-    console.log(JSON.stringify({ file: job.out, width: result.w, height: result.h, bytes: after, chromeBytes: before }));
+    console.log(JSON.stringify({ file: job.out, width: result.w, height: result.h, bytes: Buffer.from(result.b64, 'base64').length }));
   }
 } finally {
   await browser.close();
